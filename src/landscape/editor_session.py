@@ -19,8 +19,19 @@ from typing import Any
 from .geometry import ResolvedScene, resolve_scene
 from .materials import MaterialLibrary, load_materials
 from .rules import Violation, load_rules, run_rules
-from .scene_io import dump_raw, load_raw, parse_scene
-from .schema import SceneDocument, SceneObject, parse_primitive, primitive_to_raw_dict
+from .scene_io import dump_raw, load_raw, parse_scene, validate_and_order
+from .schema import SceneDocument, SceneObject, SchemaError, parse_primitive, parse_relation, primitive_to_raw_dict
+
+# The closed relation vocabulary (M2) and the raw YAML keys each one
+# owns, so switching an object from one relation type to another cleans
+# up the previous type's keys rather than leaving stale ones behind.
+RELATION_TYPES: list[str] = ["center_of", "mirror_of", "relative_to", "chord_of"]
+_RELATION_RAW_KEYS: dict[str, list[str]] = {
+    "center_of": ["center_of"],
+    "mirror_of": ["mirror_of", "about_x", "about_y"],
+    "relative_to": ["relative_to", "dx", "dy"],
+    "chord_of": ["chord_of", "offset", "angle_deg"],
+}
 
 _MAX_UNDO_DEPTH = 100
 
@@ -141,6 +152,48 @@ class EditorSession:
         self.push_undo()
         self.doc.get(object_id).material = material_id
         self.sync_object(object_id)
+        self.recompute()
+        self.autosave()
+
+    def set_relation(self, object_id: str, relation_type: str | None, ref: str | None = None, **params: Any) -> None:
+        """Set (`relation_type` + `ref` [+ params]) or clear
+        (`relation_type=None`) an object's relation — "a 'keep centred on
+        firepit' checkbox, a mirror link," per M8's checklist. A relation
+        isn't just a per-object property like material/transform: it
+        changes the dependency graph, so this re-runs `validate_and_order`
+        (unknown ref, or a cycle) rather than trusting the edit is safe.
+        On failure, automatically rolls back to the pre-edit snapshot —
+        an invalid relation must never leave the session broken even if
+        the caller forgets to call `undo()` after catching the error."""
+        self.push_undo()
+
+        obj = self.doc.get(object_id)
+        raw_obj = self.raw_objects.get(object_id)
+
+        obj.relation = None
+        if raw_obj is not None:
+            for keys in _RELATION_RAW_KEYS.values():
+                for key in keys:
+                    raw_obj.pop(key, None)
+
+        if relation_type is not None:
+            if relation_type not in RELATION_TYPES:
+                raise ValueError(f"unknown relation type '{relation_type}' (expected one of {RELATION_TYPES})")
+            if not ref:
+                raise ValueError(f"{relation_type} requires a target object id")
+            obj.relation = parse_relation({relation_type: ref, **params})
+            if raw_obj is not None:
+                raw_obj[relation_type] = ref
+                raw_obj.update(params)
+
+        try:
+            self.doc.resolution_order = validate_and_order(self.doc)
+        except SchemaError:
+            self.doc, self.raw = self._undo_stack.pop()
+            self.raw_objects = {node["id"]: node for node in (self.raw.get("objects") or [])}
+            self.recompute()
+            raise
+
         self.recompute()
         self.autosave()
 

@@ -286,6 +286,140 @@ def test_create_object_is_undoable_via_menu(qtbot):
     assert len(window.session.doc.objects) == before
 
 
+# --- relation editing ------------------------------------------------------
+
+
+def _select_only(window: EditorWindow, object_id: str) -> None:
+    """Select exactly one item — plain `item.setSelected(True)` adds to
+    whatever else is already selected, which breaks _on_selection_changed's
+    single-selection assumption (a real trap found while testing this:
+    selecting a second item without clearing first silently disables the
+    properties panel instead of switching to the new object)."""
+    window._view.scene().clearSelection()
+    item = next(i for i in window._view.scene().items() if i.data(0) == object_id)
+    item.setSelected(True)
+
+
+def test_relation_type_combo_defaults_to_none(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "deck_west")
+    assert window._panel.relation_type_combo.currentData() is None
+
+
+def test_apply_center_of_relation(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "deck_west")
+
+    window._panel.relation_type_combo.setCurrentIndex(window._panel.relation_type_combo.findData("center_of"))
+    window._panel.relation_target_combo.setCurrentIndex(window._panel.relation_target_combo.findText("firepit"))
+    window._on_apply_relation()
+
+    from landscape.schema import CenterOf
+
+    assert window.session.doc.get("deck_west").relation == CenterOf(ref="firepit")
+
+
+def test_reselecting_shows_the_applied_relation(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "deck_west")
+    window._panel.relation_type_combo.setCurrentIndex(window._panel.relation_type_combo.findData("center_of"))
+    window._panel.relation_target_combo.setCurrentIndex(window._panel.relation_target_combo.findText("firepit"))
+    window._on_apply_relation()
+
+    _select_only(window, "firepit")
+    _select_only(window, "deck_west")
+
+    assert window._panel.relation_type_combo.currentData() == "center_of"
+    assert window._panel.relation_target_combo.currentText() == "firepit"
+
+
+def test_clear_relation_button(qtbot):
+    window = _open_editor(qtbot)
+    # deck_east has mirror_of deck_west/about_x=30 already, in example.yaml
+    _select_only(window, "deck_east")
+    assert window.session.doc.get("deck_east").relation is not None
+
+    window._on_clear_relation()
+
+    assert window.session.doc.get("deck_east").relation is None
+
+
+def test_apply_relation_with_no_target_warns_and_does_nothing(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    window = _open_editor(qtbot)
+    _select_only(window, "deck_west")
+    window._panel.relation_type_combo.setCurrentIndex(window._panel.relation_type_combo.findData("center_of"))
+    window._panel.relation_target_combo.clear()  # no targets available
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
+
+    window._on_apply_relation()
+
+    assert len(warnings) == 1
+    assert window.session.doc.get("deck_west").relation is None
+
+
+def test_apply_relation_that_creates_a_cycle_warns_and_rolls_back(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    window = _open_editor(qtbot)
+    # deck_east already has mirror_of deck_west — pointing deck_west back
+    # at deck_east is a real 2-cycle, not a synthetic test case.
+    _select_only(window, "deck_west")
+    window._panel.relation_type_combo.setCurrentIndex(window._panel.relation_type_combo.findData("mirror_of"))
+    window._panel.relation_target_combo.setCurrentIndex(window._panel.relation_target_combo.findText("deck_east"))
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
+
+    window._on_apply_relation()
+
+    assert len(warnings) == 1
+    assert "cycle" in warnings[0][2]
+    assert window.session.doc.get("deck_west").relation is None
+
+
+def test_relation_param_fields_relabel_per_type(qtbot):
+    window = _open_editor(qtbot)
+    window.show()
+    _select_only(window, "deck_west")
+
+    window._panel.relation_type_combo.setCurrentIndex(window._panel.relation_type_combo.findData("mirror_of"))
+    assert window._panel.relation_param1_label.text() == "About X"
+    assert window._panel.relation_param1_spin.isVisible()
+    assert not window._panel.relation_param2_spin.isVisible()
+
+    window._panel.relation_type_combo.setCurrentIndex(window._panel.relation_type_combo.findData("relative_to"))
+    assert window._panel.relation_param1_label.text() == "Offset X"
+    assert window._panel.relation_param2_label.text() == "Offset Y"
+    assert window._panel.relation_param2_spin.isVisible()
+
+    window._panel.relation_type_combo.setCurrentIndex(window._panel.relation_type_combo.findData("center_of"))
+    assert not window._panel.relation_param1_spin.isVisible()
+    assert window._panel.relation_target_combo.isVisible()  # target field is still needed for center_of
+
+
+def test_relation_target_excludes_the_selected_object_itself(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "deck_west")
+    targets = [window._panel.relation_target_combo.itemText(i) for i in range(window._panel.relation_target_combo.count())]
+    assert "deck_west" not in targets
+    assert "firepit" in targets
+
+
+def test_set_relation_is_undoable_via_menu(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "deck_west")
+    window._panel.relation_type_combo.setCurrentIndex(window._panel.relation_type_combo.findData("center_of"))
+    window._panel.relation_target_combo.setCurrentIndex(window._panel.relation_target_combo.findText("firepit"))
+    window._on_apply_relation()
+    assert window._undo_action.isEnabled()
+
+    window._on_undo()
+
+    assert window.session.doc.get("deck_west").relation is None
+
+
 def test_save_unchanged_scene_is_byte_identical(qtbot, tmp_path):
     window = _open_editor(qtbot)
     out = tmp_path / "roundtrip.yaml"

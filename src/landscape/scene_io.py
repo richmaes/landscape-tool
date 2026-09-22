@@ -99,7 +99,7 @@ def parse_scene(raw: Any) -> SceneDocument:
         except SchemaError as exc:
             raise SchemaError(str(exc), path=path_hint, line=line_of(obj_data)) from exc
 
-    doc.resolution_order = _validate_references(doc)
+    doc.resolution_order = validate_and_order(doc)
     return doc
 
 
@@ -135,12 +135,13 @@ def _require_number(raw: Any, key: str) -> float:
     return float(raw[key])
 
 
-def _validate_references(doc: SceneDocument) -> list[str]:
+def validate_and_order(doc: SceneDocument) -> list[str]:
     """Every relation and boolean op must reference an existing object,
     and the combined dependency graph must not contain a cycle. Also
-    computes and stashes the resolution order M3 will need: objects with
-    no dependency resolve first, then anything that only depends on
-    already-resolved objects."""
+    computes the resolution order M3 needs: objects with no dependency
+    resolve first, then anything that only depends on already-resolved
+    objects. Public (not just called from `parse_scene`) so the editor
+    can re-run it after a relation edit changes the dependency graph."""
 
     ids = {obj.id for obj in doc.objects}
     deps: dict[str, set[str]] = {obj.id: set() for obj in doc.objects}

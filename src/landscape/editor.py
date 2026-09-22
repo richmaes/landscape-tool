@@ -41,18 +41,20 @@ from PySide6.QtWidgets import (
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
+    QPushButton,
     QSplitter,
     QWidget,
 )
 from shapely.geometry.base import BaseGeometry
 
-from .editor_session import CREATABLE_PRIMITIVE_KINDS, EditorSession
+from .editor_session import CREATABLE_PRIMITIVE_KINDS, RELATION_TYPES, EditorSession
 from .geometry import ResolvedObject, ResolvedScene
 from .materials import Material, MaterialLibrary
 from .rules import Violation
-from .schema import SceneDocument, SceneObject
+from .schema import SceneDocument, SceneObject, SchemaError
 
 _OBJECT_ID_ROLE = 0
 
@@ -347,10 +349,37 @@ def _swatch_icon(material: Material, size: int = 16) -> "QIcon":
     return QIcon(QPixmap.fromImage(qimage))
 
 
+_RELATION_TYPE_LABELS: dict[str, str] = {
+    "center_of": "Center Of",
+    "mirror_of": "Mirror Of",
+    "relative_to": "Relative To",
+    "chord_of": "Chord Of",
+}
+_RELATION_CLASS_TO_KEY: dict[str, str] = {
+    "CenterOf": "center_of",
+    "MirrorOf": "mirror_of",
+    "RelativeTo": "relative_to",
+    "ChordOf": "chord_of",
+}
+# (param1 label, param2 label) — None hides that field. Matches the
+# sibling keys set_relation()/schema.parse_relation() expect for each type.
+_RELATION_PARAM_LABELS: dict[str | None, tuple[str | None, str | None]] = {
+    None: (None, None),
+    "center_of": (None, None),
+    "mirror_of": ("About X", None),
+    "relative_to": ("Offset X", "Offset Y"),
+    "chord_of": ("Offset", "Angle (deg)"),
+}
+
+
 class PropertiesPanel(QWidget):
-    """Rotate/scale/reassign-material for whatever's selected. The
-    material field is a combo box, but each entry carries a swatch icon
-    generated from the actual material, not just its name."""
+    """Rotate/scale/reassign-material/edit-relation for whatever's
+    selected. The material field is a combo box with a swatch icon per
+    entry, generated from the actual material, not just its name. The
+    relation controls are generic (a type, a target, up to two numeric
+    params relabeled per type) rather than four separate per-type forms —
+    "a 'keep centred on firepit' checkbox, a mirror link," per M8's
+    checklist, kept to one small control cluster."""
 
     def __init__(self, materials: MaterialLibrary, parent: QWidget | None = None):
         super().__init__(parent)
@@ -365,22 +394,102 @@ class PropertiesPanel(QWidget):
         for material_id, material in sorted(materials.materials.items(), key=lambda kv: kv[1].name):
             self.material_combo.addItem(_swatch_icon(material), material.name, userData=material_id)
 
+        self.relation_type_combo = QComboBox()
+        self.relation_type_combo.addItem("(none)", None)
+        for key in RELATION_TYPES:
+            self.relation_type_combo.addItem(_RELATION_TYPE_LABELS[key], key)
+        self.relation_type_combo.currentIndexChanged.connect(self._update_relation_field_visibility)
+
+        self.relation_target_combo = QComboBox()
+
+        self.relation_param1_label = QLabel("Param 1")
+        self.relation_param1_spin = QDoubleSpinBox()
+        self.relation_param1_spin.setRange(-1000, 1000)
+        self.relation_param2_label = QLabel("Param 2")
+        self.relation_param2_spin = QDoubleSpinBox()
+        self.relation_param2_spin.setRange(-1000, 1000)
+
+        buttons = QHBoxLayout()
+        self.apply_relation_button = QPushButton("Apply")
+        self.clear_relation_button = QPushButton("Clear")
+        buttons.addWidget(self.apply_relation_button)
+        buttons.addWidget(self.clear_relation_button)
+
         layout = QFormLayout(self)
         layout.addRow("Object", self.id_label)
         layout.addRow("Rotation", self.rotation_spin)
         layout.addRow("Scale", self.scale_spin)
         layout.addRow("Material", self.material_combo)
+        layout.addRow("Relation", self.relation_type_combo)
+        layout.addRow("Target", self.relation_target_combo)
+        layout.addRow(self.relation_param1_label, self.relation_param1_spin)
+        layout.addRow(self.relation_param2_label, self.relation_param2_spin)
+        layout.addRow(buttons)
         self.setEnabled(False)
+        self._update_relation_field_visibility()
 
-    def show_object(self, obj: SceneObject) -> None:
+    def _update_relation_field_visibility(self) -> None:
+        kind = self.relation_type_combo.currentData()
+        label1, label2 = _RELATION_PARAM_LABELS.get(kind, (None, None))
+        self.relation_target_combo.setVisible(kind is not None)
+        self.relation_param1_label.setVisible(label1 is not None)
+        self.relation_param1_spin.setVisible(label1 is not None)
+        if label1:
+            self.relation_param1_label.setText(label1)
+        self.relation_param2_label.setVisible(label2 is not None)
+        self.relation_param2_spin.setVisible(label2 is not None)
+        if label2:
+            self.relation_param2_label.setText(label2)
+
+    def set_relation_targets(self, object_ids: list[str], exclude: str) -> None:
+        current = self.relation_target_combo.currentText()
+        self.relation_target_combo.blockSignals(True)
+        self.relation_target_combo.clear()
+        self.relation_target_combo.addItems(sorted(oid for oid in object_ids if oid != exclude))
+        index = self.relation_target_combo.findText(current)
+        self.relation_target_combo.setCurrentIndex(max(index, 0))
+        self.relation_target_combo.blockSignals(False)
+
+    def show_object(self, obj: SceneObject, all_object_ids: list[str]) -> None:
         self.id_label.setText(obj.id)
-        for widget in (self.rotation_spin, self.scale_spin, self.material_combo):
+        widgets = (
+            self.rotation_spin,
+            self.scale_spin,
+            self.material_combo,
+            self.relation_type_combo,
+            self.relation_target_combo,
+            self.relation_param1_spin,
+            self.relation_param2_spin,
+        )
+        for widget in widgets:
             widget.blockSignals(True)
+
         self.rotation_spin.setValue(obj.transform.rotation)
         self.scale_spin.setValue(obj.transform.scale)
-        index = self.material_combo.findData(obj.material or "")
-        self.material_combo.setCurrentIndex(index)
-        for widget in (self.rotation_spin, self.scale_spin, self.material_combo):
+        self.material_combo.setCurrentIndex(self.material_combo.findData(obj.material or ""))
+
+        self.set_relation_targets(all_object_ids, exclude=obj.id)
+        relation = obj.relation
+        if relation is None:
+            self.relation_type_combo.setCurrentIndex(0)
+            self.relation_param1_spin.setValue(0)
+            self.relation_param2_spin.setValue(0)
+        else:
+            key = _RELATION_CLASS_TO_KEY[type(relation).__name__]
+            self.relation_type_combo.setCurrentIndex(self.relation_type_combo.findData(key))
+            target_index = self.relation_target_combo.findText(relation.ref)
+            self.relation_target_combo.setCurrentIndex(max(target_index, 0))
+            if key == "mirror_of":
+                self.relation_param1_spin.setValue(relation.about_x or relation.about_y or 0)
+            elif key == "relative_to":
+                self.relation_param1_spin.setValue(relation.dx)
+                self.relation_param2_spin.setValue(relation.dy)
+            elif key == "chord_of":
+                self.relation_param1_spin.setValue(relation.offset)
+                self.relation_param2_spin.setValue(relation.angle_deg)
+        self._update_relation_field_visibility()
+
+        for widget in widgets:
             widget.blockSignals(False)
         self.setEnabled(True)
 
@@ -416,6 +525,8 @@ class EditorWindow(QMainWindow):
         self._panel.rotation_spin.valueChanged.connect(self._on_rotation_changed)
         self._panel.scale_spin.valueChanged.connect(self._on_scale_changed)
         self._panel.material_combo.currentIndexChanged.connect(self._on_material_changed)
+        self._panel.apply_relation_button.clicked.connect(self._on_apply_relation)
+        self._panel.clear_relation_button.clicked.connect(self._on_clear_relation)
 
         splitter = QSplitter()
         splitter.addWidget(self._view)
@@ -587,7 +698,8 @@ class EditorWindow(QMainWindow):
         items = self._view.scene().selectedItems()
         if len(items) == 1 and isinstance(items[0], EditableItem):
             self._selected_id = items[0].scene_object.id
-            self._panel.show_object(items[0].scene_object)
+            all_ids = [o.id for o in self.session.doc.objects]
+            self._panel.show_object(items[0].scene_object, all_ids)
         else:
             self._selected_id = None
             self._panel.clear()
@@ -606,4 +718,40 @@ class EditorWindow(QMainWindow):
         material_id = self._panel.material_combo.itemData(index)
         if self._selected_id and material_id:
             self.session.set_material(self._selected_id, material_id)
+            self._rebuild_scene()
+
+    def _on_apply_relation(self) -> None:
+        if not self._selected_id:
+            return
+        from PySide6.QtWidgets import QMessageBox
+
+        kind = self._panel.relation_type_combo.currentData()
+        if kind is None:
+            self._on_clear_relation()
+            return
+        target = self._panel.relation_target_combo.currentText()
+        if not target:
+            QMessageBox.warning(self, "No target", "Pick a target object for this relation.")
+            return
+
+        params: dict[str, float] = {}
+        if kind == "mirror_of":
+            params["about_x"] = self._panel.relation_param1_spin.value()
+        elif kind == "relative_to":
+            params["dx"] = self._panel.relation_param1_spin.value()
+            params["dy"] = self._panel.relation_param2_spin.value()
+        elif kind == "chord_of":
+            params["offset"] = self._panel.relation_param1_spin.value()
+            params["angle_deg"] = self._panel.relation_param2_spin.value()
+
+        try:
+            self.session.set_relation(self._selected_id, kind, target, **params)
+        except SchemaError as exc:
+            QMessageBox.warning(self, "Invalid relation", str(exc))
+            return
+        self._rebuild_scene()
+
+    def _on_clear_relation(self) -> None:
+        if self._selected_id:
+            self.session.set_relation(self._selected_id, None)
             self._rebuild_scene()

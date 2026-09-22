@@ -387,3 +387,120 @@ def test_create_object_does_not_disturb_untouched_objects(tmp_path):
     original_lines = EXAMPLE_SCENE.read_text().splitlines()
     saved_lines = scene_copy.read_text().splitlines()
     assert saved_lines[: len(original_lines)] == original_lines
+
+
+# --- set_relation --------------------------------------------------------
+
+
+def test_set_relation_center_of():
+    from landscape.schema import CenterOf
+
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    session.set_relation("deck_west", "center_of", "firepit")
+
+    assert session.doc.get("deck_west").relation == CenterOf(ref="firepit")
+    deck_centroid = session.resolved.get("deck_west").geometry.centroid
+    firepit_centroid = session.resolved.get("firepit").geometry.centroid
+    assert deck_centroid.distance(firepit_centroid) < 1e-6
+
+
+def test_set_relation_mirror_of_with_param():
+    from landscape.schema import MirrorOf
+
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    session.set_relation("water_feature_a", "mirror_of", "deck_west", about_x=10)
+
+    assert session.doc.get("water_feature_a").relation == MirrorOf(ref="deck_west", about_x=10, about_y=None)
+
+
+def test_set_relation_clears_previous_relation_type():
+    """deck_east starts with mirror_of deck_west/about_x=30 in
+    example.yaml; switching it to center_of must not leave stale
+    mirror_of/about_x keys in the raw document."""
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+
+    session.set_relation("deck_east", "center_of", "firepit")
+
+    raw_obj = session.raw_objects["deck_east"]
+    assert "mirror_of" not in raw_obj
+    assert "about_x" not in raw_obj
+    assert raw_obj["center_of"] == "firepit"
+
+
+def test_clear_relation():
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    assert session.doc.get("deck_east").relation is not None
+
+    session.set_relation("deck_east", None)
+
+    assert session.doc.get("deck_east").relation is None
+    assert "mirror_of" not in session.raw_objects["deck_east"]
+
+
+def test_set_relation_rejects_unknown_type():
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    with pytest.raises(ValueError, match="unknown relation type"):
+        session.set_relation("deck_west", "not_a_real_relation", "firepit")
+
+
+def test_set_relation_requires_a_target():
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    with pytest.raises(ValueError, match="requires a target"):
+        session.set_relation("deck_west", "center_of", None)
+
+
+def test_set_relation_rejects_unknown_ref_and_rolls_back():
+    from landscape.schema import SchemaError
+
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    with pytest.raises(SchemaError, match="unknown object"):
+        session.set_relation("deck_west", "center_of", "does_not_exist")
+
+    assert session.doc.get("deck_west").relation is None
+    assert not session.can_undo  # the push_undo() for the failed edit was popped back off
+
+
+def test_set_relation_rejects_a_cycle_and_rolls_back():
+    from landscape.schema import SchemaError
+
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    original_order = list(session.doc.resolution_order)
+    with pytest.raises(SchemaError, match="cycle"):
+        session.set_relation("deck_west", "relative_to", "deck_west", dx=0, dy=0)
+
+    assert session.doc.get("deck_west").relation is None
+    assert session.doc.resolution_order == original_order
+
+
+def test_set_relation_is_undoable_on_success():
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    session.set_relation("deck_west", "center_of", "firepit")
+    assert session.can_undo
+
+    session.undo()
+
+    assert session.doc.get("deck_west").relation is None
+
+
+def test_set_relation_saves_and_reloads_correctly(tmp_path):
+    scene_copy = tmp_path / "copy.yaml"
+    scene_copy.write_text(EXAMPLE_SCENE.read_text())
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(scene_copy)
+    session.set_relation("deck_west", "center_of", "firepit")
+    session.save()
+
+    from landscape.schema import CenterOf
+    from landscape.scene_io import load_scene as parse_saved
+
+    reloaded = parse_saved(scene_copy)
+    assert reloaded.get("deck_west").relation == CenterOf(ref="firepit")
