@@ -720,6 +720,57 @@ def test_resize_is_less_sensitive_when_zoomed_out(qtbot):
     assert abs(scale_zoomed_out - 1.0) < abs(scale_zoomed_in - 1.0)
 
 
+def test_handle_pivots_on_shapely_centroid_not_bounding_box_center(qtbot):
+    """A real bug, not a hypothetical: SelectionHandle used to pivot its
+    live preview on `path().boundingRect().center()`, but the committed
+    rotation/scale in geometry.py's `_apply_transform` pivots on
+    `origin="centroid"`. For a symmetric shape (a rect, a circle) those
+    two points coincide, which is why this went unnoticed — but
+    `garden_walkway` is a bent 3-point line, whose bbox center and
+    centroid are genuinely different points (confirmed: (9.86, 12.69)
+    vs (9.43, 12.91) in scene coordinates). Pivoting on the wrong one
+    means the object visibly jumps the instant a rotate/resize commits
+    and geometry.py re-resolves it about the *true* centroid instead."""
+    window = _open_editor(qtbot)
+    _select_only(window, "garden_walkway")
+    walkway = next(i for i in window._view.scene().items() if i.data(0) == "garden_walkway")
+    rotate_handle = next(h for h in window._selection_handles if h.kind == "rotate")
+
+    page_height = window.session.doc.page_height
+    true_centroid = window.session.resolved.get("garden_walkway").geometry.centroid
+    expected = QPointF(true_centroid.x, page_height - true_centroid.y)
+    bbox_center = walkway.path().boundingRect().center()
+
+    # the two points really are different here — otherwise this test
+    # would pass even with the old, buggy bbox-center pivot
+    assert abs(expected.x() - bbox_center.x()) > 0.1 or abs(expected.y() - bbox_center.y()) > 0.1
+
+    assert rotate_handle._center.x() == pytest.approx(expected.x(), abs=0.01)
+    assert rotate_handle._center.y() == pytest.approx(expected.y(), abs=0.01)
+
+
+def test_rotate_commit_does_not_jump_for_an_asymmetric_shape(qtbot):
+    """The end-to-end symptom of the bbox-center-vs-centroid bug: rotate
+    an asymmetric object with the handle, commit it, and recompute the
+    real geometry. The object's centroid (the point the whole rotation
+    pivoted around) must land in the same place before and after commit
+    — if the preview pivoted on the wrong point, it would jump here."""
+    window = _open_editor(qtbot)
+    _select_only(window, "garden_walkway")
+    rotate_handle = next(h for h in window._selection_handles if h.kind == "rotate")
+
+    centroid_before = window.session.resolved.get("garden_walkway").geometry.centroid
+    before = (centroid_before.x, centroid_before.y)
+
+    center = rotate_handle._center
+    rotate_handle.setPos(QPointF(center.x() + 3, center.y()))
+    rotate_handle.end_drag()  # commits via EditorSession.set_rotation -> recompute()
+
+    centroid_after = window.session.resolved.get("garden_walkway").geometry.centroid
+    assert centroid_after.x == pytest.approx(before[0], abs=0.01)
+    assert centroid_after.y == pytest.approx(before[1], abs=0.01)
+
+
 def _pos_at_distance_factor(handle, factor: float) -> QPointF:
     """A position `factor` times as far from the handle's captured center
     as its current position — NOT `handle.pos() * factor`, which moves

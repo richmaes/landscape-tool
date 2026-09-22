@@ -109,12 +109,21 @@ class EditableItem(QGraphicsPathItem):
         self,
         path: QPainterPath,
         scene_object: SceneObject,
+        centroid: QPointF,
         on_moved: Callable[[str], None] | None = None,
         on_drag_start: Callable[[], None] | None = None,
         on_drag_end: Callable[[], None] | None = None,
     ):
         super().__init__(path)
         self.scene_object = scene_object
+        # Shapely's true centroid (in this item's Qt/y-flipped coordinates),
+        # not the bounding-box center: `geometry._apply_transform` pivots
+        # scale/rotation about `origin="centroid"`, and for any asymmetric
+        # shape (an L-shaped walkway, a bent fence_line, an irregular
+        # polygon) the bbox center and the centroid are different points.
+        # SelectionHandle must pivot its live preview about this same point
+        # or the object visibly jumps the instant a rotate/resize commits.
+        self.centroid = centroid
         self._on_moved = on_moved
         self._on_drag_start = on_drag_start
         self._on_drag_end = on_drag_end
@@ -138,6 +147,7 @@ class EditableItem(QGraphicsPathItem):
                 self.scene_object.transform.tx += delta.x()
                 self.scene_object.transform.ty += -delta.y()
                 self.setPath(self.path().translated(delta.x(), delta.y()))
+                self.centroid += delta  # translation shifts the centroid by the same delta
                 if self._on_moved:
                     self._on_moved(self.scene_object.id)
             return self.pos()  # veto Qt's own pos(); the path already moved
@@ -220,7 +230,7 @@ class SelectionHandle(QGraphicsEllipseItem):
         self.setZValue(2000)
         self.setToolTip("Drag to resize" if kind == "resize" else "Drag to rotate")
         self._dragging = False
-        self._center = target.path().boundingRect().center()  # refreshed at each gesture's start too
+        self._center = target.centroid  # refreshed at each gesture's start too
         self._start_pos = None
         self._start_angle = 0.0
         self._start_scale = 1.0
@@ -251,7 +261,7 @@ class SelectionHandle(QGraphicsEllipseItem):
                 # *pre-move* center — a real bug: the object would visibly
                 # swing to a new position instead of turning in place.
                 self._dragging = True
-                self._center = self.target.path().boundingRect().center()
+                self._center = self.target.centroid
                 self._start_scale = self.target.scene_object.transform.scale
                 self._start_rotation = self.target.scene_object.transform.rotation
                 self._start_pos = self.pos()
@@ -301,7 +311,9 @@ def _add_material_item(
 ) -> QGraphicsPathItem:
     path = _path_for_geometry(obj.geometry, page_height)
     if scene_object is not None:
-        item: QGraphicsPathItem = EditableItem(path, scene_object, on_moved, on_drag_start, on_drag_end)
+        c = obj.geometry.centroid
+        centroid = QPointF(c.x, page_height - c.y)  # same y-flip _path_for_geometry uses
+        item: QGraphicsPathItem = EditableItem(path, scene_object, centroid, on_moved, on_drag_start, on_drag_end)
     else:
         item = QGraphicsPathItem(path)
         item.setData(_OBJECT_ID_ROLE, obj.id)
