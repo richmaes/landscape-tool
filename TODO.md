@@ -1,6 +1,6 @@
 # Landscape Rendering Tool — Task List
 
-**Status:** M0–M5 and M3b complete; M8 started (UI stack decided: PySide6; first editor slice — load a scene, pan/zoom, same picture as the flat renderer — landed). Rest of M8 (select/move/resize/rotate, live rule-checker feedback, undo/redo, round-trip save, export-from-editor) and M7 export are the open work.
+**Status:** M0–M5 and M3b complete; M8 underway (PySide6 editor: load, pan/zoom, select, drag-move, and panel-based rotate/scale/material edits all work). Still open in M8: create-objects, swatch-based material picking, relation editing, live rule-checker overlay, undo/redo, round-trip save, watch-reload, export-from-editor. M7 export is untouched.
 **Last updated:** 2026-09-21
 
 ## Decisions locked in
@@ -217,27 +217,42 @@ this file's own example — now actually works, wired up in
 ## M8 — Graphical editor  *(promoted: this is the primary interface; first slice landed, most of the milestone still ahead)*
 
 M8 is a large milestone; the items below are genuinely still a checklist,
-not close to done as a whole. First slice landed in
-`src/landscape/editor.py` (`landscape edit scene.yaml`): a `QGraphicsScene`
-built object-by-object (each tagged with its scene id via `setData`, since
-later steps need to hit-test individual objects, not a flattened image),
-shown in a pannable/zoomable `QGraphicsView`. 9 tests in
-`tests/test_editor.py` (118 total), run headless via `QT_QPA_PLATFORM=
-offscreen` and checked visually with a rendered screenshot before writing
-them — same picture `render_flat` produces, confirmed independently rather
-than assumed.
+not close to done as a whole. Landed so far in `src/landscape/editor.py`
+(`landscape edit scene.yaml`): load a scene into a `QGraphicsScene` built
+object-by-object (each tagged with its scene id via `setData`, since
+selection/dragging need to hit-test individual objects, not a flattened
+image), pan/zoom, select an object, drag it to move it, and a properties
+panel to change rotation/scale/material. Edits mutate the in-memory
+`SceneDocument`'s `Transform` (M3's per-object transform) — not yet saved
+to disk. 17 tests in `tests/test_editor.py` (126 total), run headless via
+`QT_QPA_PLATFORM=offscreen` and checked visually with rendered screenshots
+before writing them.
+
+Two real bugs found only by actually exercising the interaction (not by
+reading the code): (1) `QGraphicsView.ScrollHandDrag` as the default drag
+mode swallows every left-drag for panning, so plain click-drag could never
+reach an item to select or move it — fixed by making pan a space-held
+modifier instead, plain drag now hits items directly. (2) a classic
+PySide6 pitfall: a rebuilt `QGraphicsScene` with no persistent Python
+reference gets its underlying C++ object garbage-collected out from under
+the view, so every signal on it after the enclosing method returns
+silently misbehaves — fixed by holding `self._scene`. A third bug (harder
+to spot: `setScene()` itself fires `selectionChanged` for the outgoing
+scene's deselection, which raced with and clobbered the reselect-after-
+rebuild step) was fixed by capturing the selected id in a local variable
+before the rebuild rather than trusting the instance attribute mid-rebuild.
 
 - [x] Decide the UI stack (see open questions) — PySide6, see the Open Questions entry above
 - [x] Fast low-resolution preview render for interactive iteration — `build_graphics_scene()`; not yet "low-resolution" in any deliberate sense, just whatever Qt draws directly, which has been fast enough so far
-- [ ] Pan/zoom; toggle layers and render modes — pan/zoom done (`SceneGraphicsView`, drag + wheel); layer/mode toggling not started (there's only one render mode, flat, to toggle to yet)
-- [ ] Select, move, resize and rotate objects directly
+- [ ] Pan/zoom; toggle layers and render modes — pan/zoom done (`SceneGraphicsView`, space-drag + wheel); layer/mode toggling not started (there's only one render mode, flat, to toggle to yet)
+- [~] Select, move, resize and rotate objects directly — select and drag-move done (`EditableItem`); resize/rotate work but only via the properties panel's numeric fields, not a drag handle on the item itself
 - [ ] Create objects from a palette of the M2 primitives
-- [ ] Material assignment by visual swatch
+- [ ] Material assignment by visual swatch — the properties panel's material field is a name-only combo box; M4's `render_swatch()` exists but isn't wired in here yet
 - [ ] Edit relations as simple controls (a "keep centred on firepit" checkbox, a mirror link)
 - [ ] Live rule-checker feedback attached to the offending object
 - [ ] **Undo/redo**, and autosave that never silently discards hand edits
 - [ ] Lossless round-trip: load YAML, edit, save, and a file the editor has not
-      changed comes back byte-identical
+      changed comes back byte-identical — edits currently only mutate the in-memory document; there's no save yet
 - [ ] Watch-and-reload for files edited outside the editor
 - [ ] Export straight from the editor
 
