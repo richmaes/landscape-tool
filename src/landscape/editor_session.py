@@ -20,9 +20,27 @@ from .geometry import ResolvedScene, resolve_scene
 from .materials import MaterialLibrary, load_materials
 from .rules import Violation, load_rules, run_rules
 from .scene_io import dump_raw, load_raw, parse_scene
-from .schema import SceneDocument
+from .schema import SceneDocument, SceneObject, parse_primitive, primitive_to_raw_dict
 
 _MAX_UNDO_DEPTH = 100
+
+# Default field values for each creatable primitive kind, as a function
+# of the page center (cx, cy) — deliberately excludes `keepout`: it needs
+# a `rule` string and a nested `shape`, neither of which the create-object
+# palette has a control for yet.
+_DEFAULT_PRIMITIVE_KWARGS: dict[str, Any] = {
+    "circle": lambda cx, cy: {"cx": cx, "cy": cy, "r": 1.0},
+    "ellipse": lambda cx, cy: {"cx": cx, "cy": cy, "rx": 1.0, "ry": 1.0},
+    "rect": lambda cx, cy: {"x": cx - 1.0, "y": cy - 1.0, "width": 2.0, "height": 2.0},
+    "polygon": lambda cx, cy: {"points": [(cx - 1, cy - 1), (cx + 1, cy - 1), (cx, cy + 1)]},
+    "regular_polygon": lambda cx, cy: {"cx": cx, "cy": cy, "sides": 6, "size": 1.0},
+    "line": lambda cx, cy: {"x1": cx - 1, "y1": cy, "x2": cx + 1, "y2": cy},
+    "fence_line": lambda cx, cy: {"points": [(cx - 1, cy), (cx + 1, cy)]},
+    "wavy_path": lambda cx, cy: {"points": [(cx - 1, cy), (cx + 1, cy)]},
+    "walkway": lambda cx, cy: {"points": [(cx - 1, cy), (cx + 1, cy)], "width": 1.0},
+}
+
+CREATABLE_PRIMITIVE_KINDS: list[str] = list(_DEFAULT_PRIMITIVE_KWARGS)
 
 
 class EditorSession:
@@ -125,6 +143,44 @@ class EditorSession:
         self.sync_object(object_id)
         self.recompute()
         self.autosave()
+
+    def create_object(self, kind: str, object_id: str | None = None) -> str:
+        """Add a new object of the given M2 primitive `kind`, centered on
+        the page, with sensible default dimensions. Undoable like any
+        other edit. Returns the new object's id (generated as
+        `<kind>_<n>` unless `object_id` is given) so the caller can
+        select it immediately."""
+        if kind not in _DEFAULT_PRIMITIVE_KWARGS:
+            raise ValueError(
+                f"cannot create a '{kind}' from the palette (supported: {CREATABLE_PRIMITIVE_KINDS})"
+            )
+
+        self.push_undo()
+
+        object_id = object_id or self._generate_id(kind)
+        cx, cy = self.doc.page_width / 2, self.doc.page_height / 2
+        kwargs = _DEFAULT_PRIMITIVE_KWARGS[kind](cx, cy)
+        primitive = parse_primitive({"type": kind, **kwargs})
+        z = max((o.z for o in self.doc.objects), default=0) + 1
+        layer = self.doc.layers[0] if self.doc.layers else "default"
+
+        self.doc.objects.append(SceneObject(id=object_id, primitive=primitive, layer=layer, z=z))
+        self.doc.resolution_order.append(object_id)  # no relation/boolean deps: safe to resolve last
+
+        raw_node: dict[str, Any] = {"id": object_id, **primitive_to_raw_dict(primitive), "layer": layer, "z": z}
+        self.raw.setdefault("objects", []).append(raw_node)
+        self.raw_objects[object_id] = raw_node
+
+        self.recompute()
+        self.autosave()
+        return object_id
+
+    def _generate_id(self, kind: str) -> str:
+        existing = {o.id for o in self.doc.objects}
+        n = 1
+        while f"{kind}_{n}" in existing:
+            n += 1
+        return f"{kind}_{n}"
 
     def save(self, path: str | Path | None = None) -> None:
         dump_raw(self.raw, path or self.scene_path)

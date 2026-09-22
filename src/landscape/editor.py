@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 from shapely.geometry.base import BaseGeometry
 
-from .editor_session import EditorSession
+from .editor_session import CREATABLE_PRIMITIVE_KINDS, EditorSession
 from .geometry import ResolvedObject, ResolvedScene
 from .materials import Material, MaterialLibrary
 from .rules import Violation
@@ -459,6 +459,20 @@ class EditorWindow(QMainWindow):
         self._redo_action.triggered.connect(self._on_redo)
 
         self._layers_menu = self.menuBar().addMenu("&Layers")
+
+        create_menu = self.menuBar().addMenu("&Create")
+        for kind in CREATABLE_PRIMITIVE_KINDS:
+            action = create_menu.addAction(kind.replace("_", " ").title())
+            action.triggered.connect(lambda checked=False, kind=kind: self._on_create_object(kind))
+
+    def _on_create_object(self, kind: str) -> None:
+        new_id = self.session.create_object(kind)
+        self._rebuild_scene()
+        # _rebuild_scene() just reselected whatever was selected before
+        # this action (if anything) — clear that first so only the new
+        # object ends up selected, not both.
+        self._view.scene().clearSelection()
+        self._select_item_by_id(new_id)
 
     def _rebuild_layers_menu(self) -> None:
         """(Re)builds the Layers menu from the loaded scene's layer list

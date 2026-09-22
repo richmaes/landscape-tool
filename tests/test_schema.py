@@ -4,12 +4,14 @@ from landscape.schema import (
     ChordOf,
     CenterOf,
     MirrorOf,
+    PRIMITIVE_TYPES,
     RelativeTo,
     SchemaError,
     parse_boolean,
     parse_primitive,
     parse_relation,
     parse_transform,
+    primitive_to_raw_dict,
 )
 
 
@@ -107,3 +109,37 @@ def test_parse_transform_defaults_to_identity():
 def test_parse_transform_rejects_unknown_field():
     with pytest.raises(SchemaError, match="unknown transform field"):
         parse_transform({"skew": 3})
+
+
+# --- primitive_to_raw_dict: round-trips for every primitive kind --------
+
+_SAMPLE_PRIMITIVE_DATA = {
+    "circle": {"type": "circle", "cx": 1, "cy": 2, "r": 3},
+    "ellipse": {"type": "ellipse", "cx": 1, "cy": 2, "rx": 3, "ry": 4},
+    "rect": {"type": "rect", "x": 1, "y": 2, "width": 3, "height": 4, "rotation": 5, "corner_r": 0.5},
+    "polygon": {"type": "polygon", "points": [[0, 0], [1, 0], [1, 1]]},
+    "regular_polygon": {"type": "regular_polygon", "cx": 1, "cy": 2, "sides": 6, "size": 1},
+    "line": {"type": "line", "x1": 0, "y1": 0, "x2": 1, "y2": 1},
+    "fence_line": {"type": "fence_line", "points": [[0, 0], [1, 0]], "post_size": 0.5},
+    "wavy_path": {"type": "wavy_path", "points": [[0, 0], [1, 0]], "waviness": 0.4, "seed": 7},
+    "walkway": {"type": "walkway", "points": [[0, 0], [1, 0]], "width": 2},
+    "keepout": {
+        "type": "keepout",
+        "rule": "no_burnable_material",
+        "shape": {"type": "circle", "cx": 0, "cy": 0, "r": 6},
+    },
+}
+
+
+@pytest.mark.parametrize("kind", sorted(PRIMITIVE_TYPES))
+def test_primitive_to_raw_dict_round_trips(kind):
+    original = parse_primitive(_SAMPLE_PRIMITIVE_DATA[kind])
+    raw = primitive_to_raw_dict(original)
+    assert raw["type"] == kind
+    assert parse_primitive(raw) == original
+
+
+def test_primitive_to_raw_dict_points_are_plain_lists_not_tuples():
+    raw = primitive_to_raw_dict(parse_primitive({"type": "polygon", "points": [[0, 0], [1, 1]]}))
+    assert raw["points"] == [[0, 0], [1, 1]]
+    assert all(isinstance(p, list) for p in raw["points"])

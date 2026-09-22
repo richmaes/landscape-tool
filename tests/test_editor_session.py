@@ -300,3 +300,90 @@ def test_autosave_removed_after_explicit_save(tmp_path):
     session.save()
 
     assert not autosave_path.exists()
+
+
+# --- create_object -------------------------------------------------------
+
+
+def test_create_object_returns_a_unique_generated_id():
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    first = session.create_object("circle")
+    second = session.create_object("circle")
+    assert first == "circle_1"
+    assert second == "circle_2"
+
+
+def test_create_object_is_centered_on_the_page():
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    new_id = session.create_object("circle")
+    circle = session.doc.get(new_id).primitive
+    assert circle.cx == session.doc.page_width / 2
+    assert circle.cy == session.doc.page_height / 2
+
+
+def test_create_object_is_added_to_doc_and_resolution_order():
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    before = len(session.doc.objects)
+    new_id = session.create_object("rect")
+    assert len(session.doc.objects) == before + 1
+    assert new_id in session.doc.resolution_order
+    assert session.resolved.get(new_id) is not None
+
+
+def test_create_object_rejects_keepout():
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    with pytest.raises(ValueError, match="cannot create a 'keepout'"):
+        session.create_object("keepout")
+
+
+def test_create_object_is_undoable():
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    before = len(session.doc.objects)
+    session.create_object("circle")
+
+    session.undo()
+
+    assert len(session.doc.objects) == before
+
+
+@pytest.mark.parametrize("kind", ["circle", "ellipse", "rect", "polygon", "regular_polygon", "line", "fence_line", "wavy_path", "walkway"])
+def test_create_object_every_creatable_kind_resolves(kind):
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    new_id = session.create_object(kind)
+    assert session.resolved.get(new_id) is not None
+
+
+def test_create_object_saves_correctly_and_reloads(tmp_path):
+    scene_copy = tmp_path / "copy.yaml"
+    scene_copy.write_text(EXAMPLE_SCENE.read_text())
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(scene_copy)
+    original_object_count = len(session.doc.objects)
+    new_id = session.create_object("circle")
+
+    session.save()
+
+    from landscape.scene_io import load_scene as parse_saved
+
+    reloaded = parse_saved(scene_copy)
+    assert len(reloaded.objects) == original_object_count + 1
+    assert reloaded.get(new_id).primitive.r == 1.0
+
+
+def test_create_object_does_not_disturb_untouched_objects(tmp_path):
+    scene_copy = tmp_path / "copy.yaml"
+    scene_copy.write_text(EXAMPLE_SCENE.read_text())
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(scene_copy)
+    session.create_object("circle")
+    session.save()
+
+    original_lines = EXAMPLE_SCENE.read_text().splitlines()
+    saved_lines = scene_copy.read_text().splitlines()
+    assert saved_lines[: len(original_lines)] == original_lines

@@ -305,6 +305,25 @@ def parse_primitive(data: dict[str, Any]) -> Primitive:
     return cls.from_dict(data)
 
 
+def primitive_to_raw_dict(primitive: Primitive) -> dict[str, Any]:
+    """The inverse of `parse_primitive`: a plain dict of YAML-ready
+    fields (including `type`), for the editor's create-object feature to
+    insert into the raw round-trip document. Field names already match
+    YAML key names one-to-one (that's what `from_dict` relies on), so
+    this only needs to handle the two shapes `parse_primitive` special-
+    cases: `points` lists (tuples back to plain lists) and `Keepout`'s
+    nested `shape`."""
+    data: dict[str, Any] = {"type": primitive.kind}
+    for f in fields(primitive):
+        value = getattr(primitive, f.name)
+        if f.name == "points":
+            value = [list(p) for p in value]
+        elif isinstance(value, Primitive):
+            value = primitive_to_raw_dict(value)
+        data[f.name] = value
+    return data
+
+
 # ---------------------------------------------------------------------------
 # Object model
 # ---------------------------------------------------------------------------

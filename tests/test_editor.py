@@ -239,6 +239,53 @@ def test_show_object_selects_matching_material_by_id(qtbot):
     assert window._panel.material_combo.currentData() == "deck"
 
 
+# --- create object -------------------------------------------------------
+
+
+def test_create_menu_lists_every_creatable_kind(qtbot):
+    window = _open_editor(qtbot)
+    from landscape.editor_session import CREATABLE_PRIMITIVE_KINDS
+
+    create_menu = next(a for a in window.menuBar().actions() if a.text() == "&Create").menu()
+    assert len(create_menu.actions()) == len(CREATABLE_PRIMITIVE_KINDS)
+
+
+def test_create_object_adds_a_new_selectable_item(qtbot):
+    window = _open_editor(qtbot)
+    before = len(window._view.scene().items())
+
+    window._on_create_object("circle")
+
+    ids = {i.data(0) for i in window._view.scene().items() if i.data(0)}
+    assert "circle_1" in ids
+    assert len(window._view.scene().items()) > before
+
+
+def test_create_object_selects_only_the_new_object(qtbot):
+    window = _open_editor(qtbot)
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    shed.setSelected(True)
+
+    window._on_create_object("circle")
+
+    selected = window._view.scene().selectedItems()
+    assert len(selected) == 1
+    assert selected[0].data(0) == "circle_1"
+    assert window._selected_id == "circle_1"
+    assert window._panel.id_label.text() == "circle_1"
+
+
+def test_create_object_is_undoable_via_menu(qtbot):
+    window = _open_editor(qtbot)
+    before = len(window.session.doc.objects)
+    window._on_create_object("circle")
+    assert window._undo_action.isEnabled()
+
+    window._on_undo()
+
+    assert len(window.session.doc.objects) == before
+
+
 def test_save_unchanged_scene_is_byte_identical(qtbot, tmp_path):
     window = _open_editor(qtbot)
     out = tmp_path / "roundtrip.yaml"
