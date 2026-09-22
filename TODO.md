@@ -309,11 +309,44 @@ reading the code:
 
 ## M9 — Validation and testing
 
+**Test coverage audit (2026-09-21).** 139 tests exist across the project
+(schema, scene_io, geometry, materials, render_flat, rules, cli, editor,
+backyard scene). Categorized by what they actually benchmark against:
+hand-derived closed-form math (geometry/rules — real ground truth, the
+strongest coverage in the suite), hand-picked pixel/hex values
+(render_flat/materials — real ground truth), and self-consistency checks
+(scene_io round-trip, editor property get/set — these prove an invariant
+holds, not that a value is externally correct, which is the right kind of
+test for what they're checking but shouldn't be mistaken for more than
+that).
+
+Gaps found, most important first:
+- `scenes/backyard.yaml` was hand-typed from `extraction/objects.json`;
+  nothing programmatically diffs the two. Only 3 derived numbers (the
+  concentricity offset, the containment overhang, the keepout clearance)
+  are cross-checked against independently-documented values in
+  `extraction/objects.md` — the other ~17 objects' raw coordinates have
+  no automated check against their source.
+- No golden-image regression test exists anywhere yet (see the M9 item
+  below) — every image assertion today is a single-pixel sample or a
+  format-validity check (`<svg` present, `%PDF` magic bytes), not "does
+  the whole picture look right."
+- No cross-platform determinism test (see the M9 item below) — the
+  existing determinism tests only re-run in the same process/machine.
+- Editor tests never simulate a real Qt mouse/key event (`wheelEvent`
+  zoom, space-bar pan) — every interaction test calls the underlying API
+  directly (`setPos()`, `setSelected()`).
+- `relative_to`/`chord_of` aren't verified end-to-end with a numeric
+  expected position the way `center_of`/`mirror_of` are; `directional_clearance`
+  only exercises its "south" branch; `landscape edit`'s actual CLI
+  execution path (not just its argparse wiring) never runs in a test.
+
 - [ ] Unit tests: primitive generation, `waviness` behavior at parameter extremes, boolean ops
 - [ ] Schema validation tests, including malformed scenes producing useful errors
 - [ ] Golden-image regression tests for both render modes
 - [ ] Round-trip check: scene to render, visually verified against the source PDF plan
 - [ ] Determinism test across runs and platforms
+- [ ] Revisit test coverage gaps (see audit note above)
 
 ## M10 — Documentation
 
