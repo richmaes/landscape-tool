@@ -1,0 +1,72 @@
+# Starter material library (M4). Kept separate from any scene file so a
+# palette can be swapped without touching scene YAML. `color` is the flat
+# fill for M5; `texture`/`edge` are recipe placeholders for M6, which
+# hasn't picked its techniques yet (see TODO.md) — the keys here are a
+# name plus free-form params, not consumed by any renderer today.
+
+materials:
+  lawn:
+    name: Lawn
+    color: "#B7D9A8"
+    texture: {style: none}
+    edge: {weight: 0.5, color: null}
+
+  planting_bed:
+    name: Planting Bed
+    color: "#C9A97E"
+    texture: {style: none}
+    edge: {weight: 0.5, color: null}
+
+  mulch:
+    name: Mulch
+    color: "#A9744F"
+    texture: {style: none}
+    edge: {weight: 0.5, color: null}
+
+  gravel:
+    name: Gravel
+    color: "#D6D2C4"
+    texture: {style: stipple, density: 0.4}
+    edge: {weight: 0.5, color: null}
+
+  flagstone:
+    name: Flagstone
+    color: "#9FB4C7"
+    texture: {style: none}
+    edge: {weight: 1.0, color: null}
+
+  concrete:
+    name: Concrete
+    color: "#CBCBD1"
+    texture: {style: none}
+    edge: {weight: 0.75, color: null}
+
+  deck:
+    name: Deck
+    color: "#E0B27A"
+    texture: {style: hatch, direction: 45}
+    edge: {weight: 1.0, color: null}
+
+  water:
+    name: Water
+    color: "#9AC6D6"
+    texture: {style: ripple}
+    edge: {weight: 1.0, color: "#5C8A9A"}
+
+  stone_wall:
+    name: Stone Wall
+    color: "#9B8F87"
+    texture: {style: none}
+    edge: {weight: 1.5, color: null}
+
+  fence:
+    name: Fence
+    color: "#E4DCC8"
+    texture: {style: none}
+    edge: {weight: 1.0, color: null}
+
+  tree_canopy:
+    name: Tree / Shrub Canopy
+    color: "#7FA66B"
+    texture: {style: scallop}
+    edge: {weight: 1.0, color: null}

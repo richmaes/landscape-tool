@@ -1,6 +1,6 @@
 # Landscape Rendering Tool — Task List
 
-**Status:** M0–M3b complete — M4 material system (or M1's leftover objects.json-to-YAML conversion) is the next work
+**Status:** M0–M4 complete — M5 flat renderer (or M1's leftover objects.json-to-YAML conversion) is the next work
 **Last updated:** 2026-09-21
 
 ## Decisions locked in
@@ -162,14 +162,18 @@ rules fire and which stay silent.
 - [ ] Violations surface in the editor next to the offending object, not in a log — genuinely needs the M8 editor to exist first; `Violation.location` is designed for this but there's no UI yet to prove it in
 - [x] Rules are data, so new ones do not need code changes — true for new *instances* of the 5 existing check types (a new entry in `rules/default.yaml`); a genuinely new *kind* of check still needs a new Python function, the same trade-off M2 made for its relation vocabulary
 
-## M4 — Material system
+## M4 — Material system  *(complete)*
 
-- [ ] Material definition schema: name, flat color, texture recipe, edge treatment
-- [ ] Material library file, separate from scenes, so palettes swap independently
-- [ ] Starter materials: lawn, planting bed, mulch, gravel, flagstone, concrete, deck/wood, water, stone wall, fence, mature tree/shrub canopy
-- [ ] Pastel palette definition with a rule for keeping adjacent materials distinguishable
-- [ ] Material resolution: object to material to render parameters, with sensible fallback
-- [ ] Visual swatch picking — the designer chooses materials by appearance and name, never by hex code
+Implemented in `src/landscape/materials.py`, library data in
+`assets/materials.yaml`. 10 tests in `tests/test_materials.py` (95 total
+across the project).
+
+- [x] Material definition schema: name, flat color, texture recipe, edge treatment — `Material` (`texture`/`edge` are free-form recipe placeholders; M6 hasn't picked its techniques yet, so nothing consumes them beyond `render_swatch` using `color`)
+- [x] Material library file, separate from scenes, so palettes swap independently — `assets/materials.yaml`, loaded by `load_materials()`
+- [x] Starter materials: lawn, planting bed, mulch, gravel, flagstone, concrete, deck/wood, water, stone wall, fence, mature tree/shrub canopy — all 11 present
+- [x] Pastel palette definition with a rule for keeping adjacent materials distinguishable — `find_indistinguishable_pairs()`, a hue-weighted HSL distance check (same warn-don't-block spirit as M3b, just at palette-authoring time rather than scene time); caught `planting_bed`/`deck` as too close on the first pass and the palette was re-tuned until clean, so the check is proven to actually catch something, not just present
+- [x] Material resolution: object to material to render parameters, with sensible fallback — `MaterialLibrary.resolve()`; unknown or `None` material ids fall back to an unmistakable magenta (`#FF00FF`) rather than crashing or rendering blank
+- [x] Visual swatch picking — the designer chooses materials by appearance and name, never by hex code — `render_swatch()` gives a flat-color `PIL.Image` swatch for M8's material picker to display; the picker UI itself is M8's job
 
 ## M5 — Renderer: flat pastel mode
 
