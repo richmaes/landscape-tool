@@ -282,6 +282,48 @@ def test_save_action_writes_the_file(qtbot, tmp_path, monkeypatch):
     assert out.read_text() == EXAMPLE_SCENE.read_text()
 
 
+def test_export_action_writes_a_rendered_file(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    window = _open_editor(qtbot)
+    out = tmp_path / "via_menu.png"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), "PNG (*.png)"))
+
+    export_action = next(a for a in window.menuBar().actions()[0].menu().actions() if a.text() == "&Export…")
+    export_action.trigger()
+
+    assert out.exists() and out.stat().st_size > 0
+    assert "Exported to" in window.statusBar().currentMessage()
+
+
+def test_export_action_cancelled_dialog_does_nothing(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    window = _open_editor(qtbot)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: ("", ""))
+
+    export_action = next(a for a in window.menuBar().actions()[0].menu().actions() if a.text() == "&Export…")
+    export_action.trigger()  # must not raise, must not touch the status bar
+
+    assert window.statusBar().currentMessage() == ""
+
+
+def test_export_action_shows_warning_on_bad_extension(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+    window = _open_editor(qtbot)
+    out = tmp_path / "via_menu.jpg"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), "JPEG (*.jpg)"))
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
+
+    export_action = next(a for a in window.menuBar().actions()[0].menu().actions() if a.text() == "&Export…")
+    export_action.trigger()
+
+    assert len(warnings) == 1
+    assert not out.exists()
+
+
 def test_add_violation_overlays_highlights_named_objects(qtbot):
     scene = ResolvedScene(objects=[_obj("a", box(0, 0, 2, 2), material="red")])
     gscene = build_graphics_scene(scene, _tiny_library(), page_height=10)

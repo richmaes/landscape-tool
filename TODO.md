@@ -1,6 +1,6 @@
 # Landscape Rendering Tool — Task List
 
-**Status:** M0–M5, M1, and M3b complete; M8 underway (PySide6 editor: load, pan/zoom, select, drag-move, panel-based rotate/scale/material edits, lossless save-to-disk, and live rule-checker feedback all work — the last one also closes out M3b's final open item). The editor's non-GUI logic is now factored out into `EditorSession` (`editor_session.py`, zero Qt dependency), so `EditorWindow` is a thin wrapper over it. `scenes/backyard.yaml` is now the real design (converted from `extraction/objects.json`), not just the `scenes/example.yaml` schema fixture — see M1 for a real finding this surfaced (the documented `deck_intrudes_on_keepout` doesn't actually hold against the keepout as drawn). Still open in M8: create-objects, swatch-based material picking, relation editing, undo/redo, watch-reload, export-from-editor. M7 export is untouched.
+**Status:** M0–M5, M1, and M3b complete; M8 underway (PySide6 editor: load, pan/zoom, select, drag-move, panel-based rotate/scale/material edits, lossless save-to-disk, live rule-checker feedback, and export-to-PNG/SVG/PDF all work). The editor's non-GUI logic is factored out into `EditorSession` (`editor_session.py`, zero Qt dependency), so `EditorWindow` is a thin wrapper over it. `scenes/backyard.yaml` is now the real design (converted from `extraction/objects.json`), not just the `scenes/example.yaml` schema fixture — see M1 for a real finding this surfaced (the documented `deck_intrudes_on_keepout` doesn't actually hold against the keepout as drawn). Still open in M8: create-objects, swatch-based material picking, relation editing, undo/redo, watch-reload. M7's own export (DPI/scale bar/north arrow/batch) is untouched — this is only exporting what M5 already renders, not extending it.
 **Last updated:** 2026-09-21
 
 ## Decisions locked in
@@ -266,8 +266,10 @@ raw `ruamel.yaml` document, so `save_scene()` (via M2's `dump_raw`) only
 changes what was actually touched, and — when `--rules` is given — live
 DRC feedback: a dashed highlight + marker on every object a rule
 violation names, tooltip carrying the message, recomputed on every edit
-(`add_violation_overlays()`; this also closes M3b's last open item). 29
-tests in `tests/test_editor.py`, run headless via `QT_QPA_PLATFORM=offscreen`
+(`add_violation_overlays()`; this also closes M3b's last open item); and
+File > Export…, which renders the current (edited) scene straight to
+PNG/SVG/PDF via M5's `render_flat` pipeline. 32 tests in
+`tests/test_editor.py`, run headless via `QT_QPA_PLATFORM=offscreen`
 and checked visually with rendered screenshots before writing them.
 
 **GUI/core separation.** The rest of the project already had zero Qt
@@ -323,7 +325,7 @@ reading the code:
 - [x] Lossless round-trip: load YAML, edit, save, and a file the editor has not
       changed comes back byte-identical — `save_scene()`; verified both ways: an unchanged load-then-save reproduces the source file byte-for-byte, and an edited save touches only the edited object's `material`/`transform` (a cosmetic caveat: a rewritten `transform` switches from whatever flow/block style it had to block style, since it's written as a plain dict — acceptable since the guarantee is about *untouched* content, not about preserving formatting on a value just overwritten)
 - [ ] Watch-and-reload for files edited outside the editor
-- [ ] Export straight from the editor
+- [x] Export straight from the editor — `EditorSession.export()` dispatches to M5's `render_scene_to_svg/pdf/png` by extension, so the editor and `landscape render` produce identical output for the same scene; File > Export… in the GUI, with a warning dialog on an unsupported extension instead of a silent failure
 
 ## M8b — CLI
 

@@ -392,6 +392,24 @@ class EditorWindow(QMainWindow):
 
         save_as_action.triggered.connect(_save_as)
 
+        export_action = file_menu.addAction("&Export…")
+        export_action.triggered.connect(self._on_export)
+
+    def _on_export(self) -> None:
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Rendered Scene", "", "PNG (*.png);;SVG (*.svg);;PDF (*.pdf)"
+        )
+        if not path:
+            return
+        try:
+            self.session.export(path, show_legend=True, show_annotations=self._show_annotations)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Export failed", str(exc))
+            return
+        self.statusBar().showMessage(f"Exported to {path}")
+
     def load_scene(self, scene_path: str | Path, show_annotations: bool = False) -> None:
         self.session.load(scene_path)
         self._show_annotations = show_annotations

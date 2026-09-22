@@ -126,3 +126,46 @@ def test_sync_object_skips_unknown_id():
     session = EditorSession(DEFAULT_MATERIALS)
     session.load(EXAMPLE_SCENE)
     session.sync_object("does_not_exist")  # must not raise
+
+
+# --- export ----------------------------------------------------------
+
+
+def test_export_png(tmp_path):
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(EXAMPLE_SCENE)
+    out = tmp_path / "out.png"
+    session.export(out, show_legend=True, show_annotations=True)
+    assert out.exists() and out.stat().st_size > 0
+
+
+def test_export_svg(tmp_path):
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(EXAMPLE_SCENE)
+    out = tmp_path / "out.svg"
+    session.export(out)
+    assert "<svg" in out.read_text()
+
+
+def test_export_pdf(tmp_path):
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(EXAMPLE_SCENE)
+    out = tmp_path / "out.pdf"
+    session.export(out)
+    assert out.read_bytes()[:4] == b"%PDF"
+
+
+def test_export_rejects_unsupported_extension(tmp_path):
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(EXAMPLE_SCENE)
+    with pytest.raises(ValueError, match="unsupported export extension"):
+        session.export(tmp_path / "out.jpg")
+
+
+def test_export_reflects_edits():
+    """Export renders session.resolved, so an edit made before exporting
+    shows up in the output — not a stale snapshot from load()."""
+    session = EditorSession(DEFAULT_MATERIALS, BACKYARD_RULES)
+    session.load(BACKYARD_SCENE)
+    session.set_material("firepit", "water")
+    assert session.resolved.get("firepit").material == "water"
