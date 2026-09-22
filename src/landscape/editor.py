@@ -220,7 +220,7 @@ class SelectionHandle(QGraphicsEllipseItem):
         self.setZValue(2000)
         self.setToolTip("Drag to resize" if kind == "resize" else "Drag to rotate")
         self._dragging = False
-        self._center = target.path().boundingRect().center()
+        self._center = target.path().boundingRect().center()  # refreshed at each gesture's start too
         self._start_pos = None
         self._start_angle = 0.0
         self._start_scale = 1.0
@@ -241,11 +241,17 @@ class SelectionHandle(QGraphicsEllipseItem):
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange and self.scene() is not None:
             if not self._dragging:
-                # A fresh gesture: re-read the target's *current* committed
-                # values, not whatever this handle was constructed with —
-                # dragging the same handle twice without an intervening
-                # rebuild must use the first drag's result as its baseline.
+                # A fresh gesture: re-read the target's *current* state,
+                # not whatever this handle was constructed with — a plain
+                # move-drag on the object deliberately doesn't rebuild the
+                # scene (see EditableItem), so it never recreates this
+                # handle either. Without refreshing _center here too, a
+                # move followed by a resize/rotate (without reselecting
+                # in between) would scale/rotate about the object's
+                # *pre-move* center — a real bug: the object would visibly
+                # swing to a new position instead of turning in place.
                 self._dragging = True
+                self._center = self.target.path().boundingRect().center()
                 self._start_scale = self.target.scene_object.transform.scale
                 self._start_rotation = self.target.scene_object.transform.rotation
                 self._start_pos = self.pos()

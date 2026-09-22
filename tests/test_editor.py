@@ -567,6 +567,70 @@ def test_resize_is_undoable(qtbot):
     assert window.session.doc.get("shed").transform.scale == before
 
 
+def test_rotate_after_move_rotates_in_place_not_around_stale_center(qtbot):
+    """A real, confirmed bug, not a hypothetical: SelectionHandle._center
+    used to be cached once at handle-construction time. A plain move-drag
+    deliberately doesn't rebuild the scene (see EditableItem), so it never
+    recreated the handles either — meaning rotating right after moving an
+    object (without reselecting in between) rotated it about its
+    *pre-move* center, making it visibly swing to a new position instead
+    of turning in place. Reproduced with the exact numbers from manual
+    diagnosis before fixing it."""
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    rotate_handle = next(h for h in window._selection_handles if h.kind == "rotate")
+
+    shed.setPos(QPointF(10, 10))
+    center_after_move = shed.sceneBoundingRect().center()
+
+    rotate_handle.setPos(QPointF(rotate_handle.pos().x() + 3, rotate_handle.pos().y()))
+
+    center_during_rotate = shed.sceneBoundingRect().center()
+    assert center_during_rotate.x() == pytest.approx(center_after_move.x(), abs=0.01)
+    assert center_during_rotate.y() == pytest.approx(center_after_move.y(), abs=0.01)
+
+    rotate_handle.end_drag()
+    center_after_commit = shed.sceneBoundingRect().center()
+    assert center_after_commit.x() == pytest.approx(center_after_move.x(), abs=0.01)
+    assert center_after_commit.y() == pytest.approx(center_after_move.y(), abs=0.01)
+
+
+def test_resize_after_move_scales_about_current_center_not_stale(qtbot):
+    """The same bug, other handle: resizing after a move must scale about
+    the object's post-move center, not wherever it was when the handle
+    was first created."""
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    resize_handle = next(h for h in window._selection_handles if h.kind == "resize")
+
+    shed.setPos(QPointF(10, 10))
+    center_after_move = shed.sceneBoundingRect().center()
+
+    resize_handle.setPos(resize_handle.pos() + QPointF(0.5, 0))
+    resize_handle.end_drag()
+
+    center_after_resize = shed.sceneBoundingRect().center()
+    assert center_after_resize.x() == pytest.approx(center_after_move.x(), abs=0.01)
+    assert center_after_resize.y() == pytest.approx(center_after_move.y(), abs=0.01)
+
+
+def test_handle_center_refreshes_even_without_an_intervening_move(qtbot):
+    """Sanity check: the fix (re-reading _center at the start of every
+    gesture) must not break the ordinary case where nothing moved."""
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    rotate_handle = next(h for h in window._selection_handles if h.kind == "rotate")
+    expected_center = shed.sceneBoundingRect().center()
+
+    rotate_handle.setPos(QPointF(rotate_handle.pos().x() + 3, rotate_handle.pos().y()))
+
+    assert rotate_handle._center.x() == pytest.approx(expected_center.x(), abs=0.01)
+    assert rotate_handle._center.y() == pytest.approx(expected_center.y(), abs=0.01)
+
+
 def test_resize_cannot_exceed_the_per_gesture_clamp(qtbot):
     """A real bug, not a hypothetical: dragging a resize handle far
     enough used to blow the scale up unboundedly. A single gesture can
