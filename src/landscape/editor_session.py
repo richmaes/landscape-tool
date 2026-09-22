@@ -12,6 +12,7 @@ now extends to the editor's own orchestration, not just its calculations.
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,8 @@ from .materials import MaterialLibrary, load_materials
 from .rules import Violation, load_rules, run_rules
 from .scene_io import dump_raw, load_raw, parse_scene
 from .schema import SceneDocument
+
+_MAX_UNDO_DEPTH = 100
 
 
 class EditorSession:
@@ -32,12 +35,52 @@ class EditorSession:
         self.scene_path: Path | None = None
         self.resolved: ResolvedScene | None = None
         self.violations: list[Violation] = []
+        self._undo_stack: list[tuple[SceneDocument, Any]] = []
+        self._redo_stack: list[tuple[SceneDocument, Any]] = []
 
     def load(self, scene_path: str | Path) -> None:
         self.scene_path = Path(scene_path)
         self.raw = load_raw(scene_path)
         self.raw_objects = {node["id"]: node for node in (self.raw.get("objects") or [])}
         self.doc = parse_scene(self.raw)
+        self._undo_stack = []
+        self._redo_stack = []
+        self.recompute()
+
+    def push_undo(self) -> None:
+        """Snapshot the current doc+raw before a mutation, so `undo()` can
+        get back to it. Any new snapshot invalidates the redo stack —
+        standard undo/redo semantics: you can't redo past a fresh edit.
+        `doc` (plain dataclasses) and `raw` (a ruamel round-trip tree)
+        both deepcopy safely and independently — verified directly rather
+        than assumed, since ruamel's CommentedMap isn't a plain dict."""
+        self._undo_stack.append((copy.deepcopy(self.doc), copy.deepcopy(self.raw)))
+        if len(self._undo_stack) > _MAX_UNDO_DEPTH:
+            self._undo_stack.pop(0)
+        self._redo_stack = []
+
+    @property
+    def can_undo(self) -> bool:
+        return bool(self._undo_stack)
+
+    @property
+    def can_redo(self) -> bool:
+        return bool(self._redo_stack)
+
+    def undo(self) -> None:
+        if not self._undo_stack:
+            return
+        self._redo_stack.append((self.doc, self.raw))
+        self.doc, self.raw = self._undo_stack.pop()
+        self.raw_objects = {node["id"]: node for node in (self.raw.get("objects") or [])}
+        self.recompute()
+
+    def redo(self) -> None:
+        if not self._redo_stack:
+            return
+        self._undo_stack.append((self.doc, self.raw))
+        self.doc, self.raw = self._redo_stack.pop()
+        self.raw_objects = {node["id"]: node for node in (self.raw.get("objects") or [])}
         self.recompute()
 
     def recompute(self) -> None:
@@ -63,22 +106,48 @@ class EditorSession:
             raw_obj["transform"] = {"tx": t.tx, "ty": t.ty, "rotation": t.rotation, "scale": t.scale}
 
     def set_rotation(self, object_id: str, value: float) -> None:
+        self.push_undo()
         self.doc.get(object_id).transform.rotation = value
         self.sync_object(object_id)
         self.recompute()
+        self.autosave()
 
     def set_scale(self, object_id: str, value: float) -> None:
+        self.push_undo()
         self.doc.get(object_id).transform.scale = value
         self.sync_object(object_id)
         self.recompute()
+        self.autosave()
 
     def set_material(self, object_id: str, material_id: str) -> None:
+        self.push_undo()
         self.doc.get(object_id).material = material_id
         self.sync_object(object_id)
         self.recompute()
+        self.autosave()
 
     def save(self, path: str | Path | None = None) -> None:
         dump_raw(self.raw, path or self.scene_path)
+        self._discard_autosave()
+
+    @property
+    def autosave_path(self) -> Path | None:
+        return self.scene_path.with_suffix(self.scene_path.suffix + ".autosave") if self.scene_path else None
+
+    def autosave(self) -> None:
+        """Write the in-progress edit to a sidecar file after every
+        mutation, so a crash never silently discards hand edits — the
+        M8 requirement this satisfies doesn't need a restore-on-load
+        prompt to be true; it needs edits to never live only in memory."""
+        if self.autosave_path is not None:
+            dump_raw(self.raw, self.autosave_path)
+
+    def _discard_autosave(self) -> None:
+        """An explicit save() supersedes the autosave — remove it so a
+        stale sidecar file doesn't linger once the real file is current."""
+        path = self.autosave_path
+        if path is not None and path.exists():
+            path.unlink()
 
     def export(self, path: str | Path, **kwargs: Any) -> None:
         """Render the current (edited) scene to an image file, reusing

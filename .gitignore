@@ -10,5 +10,8 @@ venv/
 out/
 *.tmp
 
+# Editor autosave sidecars (src/landscape/editor_session.py)
+*.autosave
+
 # OS
 .DS_Store

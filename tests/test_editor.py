@@ -1,4 +1,6 @@
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # must be set before any Qt import
@@ -27,6 +29,20 @@ def _tiny_library():
     return MaterialLibrary(materials={"red": Material(id="red", name="Red", color="#FF0000")})
 
 
+def _scene_copy(path: Path) -> Path:
+    """A private copy of a scene fixture in its own temp directory, same
+    filename. Editor tests routinely mutate the loaded scene, which now
+    (since autosave landed) writes a `.autosave` sidecar next to
+    whatever path was loaded — loading the real fixture directly would
+    litter the repo with those on every test run. Not pytest's `tmp_path`
+    fixture: threading it through every one of ~50 call sites across
+    this file would be a much bigger change than the problem warrants."""
+    tmp_dir = Path(tempfile.mkdtemp(prefix="landscape-test-"))
+    copy_path = tmp_dir / path.name
+    shutil.copy(path, copy_path)
+    return copy_path
+
+
 def _open_editor(qtbot, show_annotations: bool = True) -> EditorWindow:
     """A loaded EditorWindow, registered with qtbot so pytest-qt owns its
     teardown — relying on Python's GC to clean up QGraphicsScene/QWidget
@@ -35,7 +51,7 @@ def _open_editor(qtbot, show_annotations: bool = True) -> EditorWindow:
     reproducible segfault during this feature's development."""
     window = EditorWindow(materials_path=DEFAULT_MATERIALS)
     qtbot.addWidget(window)
-    window.load_scene(EXAMPLE_SCENE, show_annotations=show_annotations)
+    window.load_scene(_scene_copy(EXAMPLE_SCENE), show_annotations=show_annotations)
     return window
 
 
@@ -356,9 +372,77 @@ def test_hidden_layers_reset_on_new_load(qtbot):
     window._on_layer_toggled("structures", False)
     assert window._hidden_layers == {"structures"}
 
-    window.load_scene(EXAMPLE_SCENE, show_annotations=True)
+    window.load_scene(_scene_copy(EXAMPLE_SCENE), show_annotations=True)
 
     assert window._hidden_layers == set()
+
+
+# --- undo/redo ---------------------------------------------------------
+
+
+def test_undo_action_disabled_until_an_edit_happens(qtbot):
+    window = _open_editor(qtbot)
+    assert not window._undo_action.isEnabled()
+
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    shed.setSelected(True)
+    window._panel.rotation_spin.setValue(77)
+
+    assert window._undo_action.isEnabled()
+
+
+def test_undo_action_reverts_panel_edit(qtbot):
+    window = _open_editor(qtbot)
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    shed.setSelected(True)
+    before = window.session.doc.get("shed").transform.rotation
+    window._panel.rotation_spin.setValue(77)
+
+    window._on_undo()
+
+    assert window.session.doc.get("shed").transform.rotation == before
+    assert window._redo_action.isEnabled()
+
+
+def test_redo_action_reapplies_undone_edit(qtbot):
+    window = _open_editor(qtbot)
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    shed.setSelected(True)
+    window._panel.rotation_spin.setValue(77)
+    window._on_undo()
+
+    window._on_redo()
+
+    assert window.session.doc.get("shed").transform.rotation == 77
+
+
+def test_drag_gesture_produces_exactly_one_undo_step(qtbot):
+    window = _open_editor(qtbot)
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    depth_before = len(window.session._undo_stack)
+
+    shed.setPos(QPointF(1, 0))
+    shed.setPos(QPointF(2, 0))
+    shed.setPos(QPointF(3, 0))
+
+    assert len(window.session._undo_stack) - depth_before == 1
+
+    # simulate the release that would normally end the gesture (no real
+    # QGraphicsSceneMouseEvent to dispatch here) — the next move should
+    # then start a fresh gesture and push a second snapshot
+    shed._dragging = False
+    shed.setPos(QPointF(4, 0))
+    assert len(window.session._undo_stack) - depth_before == 2
+
+
+def test_click_without_movement_does_not_push_undo(qtbot):
+    window = _open_editor(qtbot)
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    depth_before = len(window.session._undo_stack)
+
+    shed.setSelected(True)  # a selection click, no movement
+
+    assert len(window.session._undo_stack) == depth_before
 
 
 def test_add_violation_overlays_highlights_named_objects(qtbot):
@@ -404,7 +488,7 @@ def test_no_overlays_added_when_no_violations(qtbot):
 def test_editor_computes_violations_against_real_backyard_scene(qtbot):
     window = EditorWindow(materials_path=DEFAULT_MATERIALS, rules_path=BACKYARD_RULES)
     qtbot.addWidget(window)
-    window.load_scene(BACKYARD_SCENE, show_annotations=True)
+    window.load_scene(_scene_copy(BACKYARD_SCENE), show_annotations=True)
 
     assert {v.rule_id for v in window.session.violations} == {
         "no_burnable_in_firepit_keepout",
@@ -423,7 +507,7 @@ def test_editor_without_rules_path_has_no_violations(qtbot):
 def test_violations_recompute_after_an_edit(qtbot):
     window = EditorWindow(materials_path=DEFAULT_MATERIALS, rules_path=BACKYARD_RULES)
     qtbot.addWidget(window)
-    window.load_scene(BACKYARD_SCENE, show_annotations=True)
+    window.load_scene(_scene_copy(BACKYARD_SCENE), show_annotations=True)
     assert len(window.session.violations) == 3
 
     # recentering the keepout on the firepit should clear the concentricity

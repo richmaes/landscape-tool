@@ -6,11 +6,13 @@ properties panel to change its rotation/scale/material, save (Ctrl+S or
 File > Save/Save As) back to disk losslessly, and — if a rules file is
 given — live rule-checker feedback: a marker at each violation's location
 plus a dashed highlight on every object it names, both carrying the
-violation's message as a tooltip, recomputed on every edit. This also
-closes M3b's last open item ("violations surface in the editor next to
-the offending object, not in a log"). There's still no undo/redo,
-no create-object, and no relation editing — see the M8 checklist in
-TODO.md for the real state.
+violation's message as a tooltip, recomputed on every edit (this also
+closes M3b's last open item), Ctrl+Z/Ctrl+Shift+Z undo/redo (one snapshot
+per drag *gesture*, not per pixel — see `EditableItem`), autosave to a
+`.autosave` sidecar after every edit, layer visibility toggling, and
+File > Export… straight to PNG/SVG/PDF. There's still no create-object
+and no relation editing — see the M8 checklist in TODO.md for the real
+state.
 
 Uses PySide6 (`QGraphicsScene`/`QGraphicsView`), per the UI-stack decision
 recorded in TODO.md.
@@ -102,10 +104,15 @@ class EditableItem(QGraphicsPathItem):
         path: QPainterPath,
         scene_object: SceneObject,
         on_moved: Callable[[str], None] | None = None,
+        on_drag_start: Callable[[], None] | None = None,
+        on_drag_end: Callable[[], None] | None = None,
     ):
         super().__init__(path)
         self.scene_object = scene_object
         self._on_moved = on_moved
+        self._on_drag_start = on_drag_start
+        self._on_drag_end = on_drag_end
+        self._dragging = False
         self.setData(_OBJECT_ID_ROLE, scene_object.id)
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.ItemIsMovable, True)
@@ -115,6 +122,12 @@ class EditableItem(QGraphicsPathItem):
         if change == QGraphicsItem.ItemPositionChange and self.scene() is not None:
             delta = value - self.pos()
             if delta.x() or delta.y():
+                if not self._dragging:
+                    # One undo snapshot per drag *gesture*, not per pixel:
+                    # take it before the first change this press applies.
+                    self._dragging = True
+                    if self._on_drag_start:
+                        self._on_drag_start()
                 # Qt's y is flipped relative to the scene's +y-north convention.
                 self.scene_object.transform.tx += delta.x()
                 self.scene_object.transform.ty += -delta.y()
@@ -124,6 +137,13 @@ class EditableItem(QGraphicsPathItem):
             return self.pos()  # veto Qt's own pos(); the path already moved
         return super().itemChange(change, value)
 
+    def mouseReleaseEvent(self, event) -> None:
+        super().mouseReleaseEvent(event)
+        if self._dragging:
+            self._dragging = False
+            if self._on_drag_end:
+                self._on_drag_end()
+
 
 def _add_material_item(
     scene: QGraphicsScene,
@@ -132,10 +152,12 @@ def _add_material_item(
     page_height: float,
     scene_object: SceneObject | None = None,
     on_moved: Callable[[str], None] | None = None,
+    on_drag_start: Callable[[], None] | None = None,
+    on_drag_end: Callable[[], None] | None = None,
 ) -> QGraphicsPathItem:
     path = _path_for_geometry(obj.geometry, page_height)
     if scene_object is not None:
-        item: QGraphicsPathItem = EditableItem(path, scene_object, on_moved)
+        item: QGraphicsPathItem = EditableItem(path, scene_object, on_moved, on_drag_start, on_drag_end)
     else:
         item = QGraphicsPathItem(path)
         item.setData(_OBJECT_ID_ROLE, obj.id)
@@ -182,6 +204,8 @@ def build_graphics_scene(
     doc: SceneDocument | None = None,
     on_object_moved: Callable[[str], None] | None = None,
     hidden_layers: set[str] | None = None,
+    on_drag_start: Callable[[], None] | None = None,
+    on_drag_end: Callable[[], None] | None = None,
 ) -> QGraphicsScene:
     """The same picture `render_flat` draws, as interactive QGraphicsItems
     instead of a flattened cairo surface. Pass `doc` (the source
@@ -189,7 +213,9 @@ def build_graphics_scene(
     without it, this builds a read-only preview, same as before this
     became editable. `on_object_moved(object_id)` fires after a drag bakes
     itself into that object's transform, for anyone (the editor's
-    round-trip save) that needs to react to it. `hidden_layers` skips
+    round-trip save) that needs to react to it; `on_drag_start`/
+    `on_drag_end` bracket one whole drag *gesture* (for one undo snapshot
+    per drag, not per pixel — see `EditableItem`). `hidden_layers` skips
     objects on those layers entirely — "toggle layers" from M8's
     checklist; toggling render *modes* is a separate, still-open item
     since there's only flat mode to toggle to until M6 exists."""
@@ -209,7 +235,9 @@ def build_graphics_scene(
             continue
         material = materials.resolve(obj.material)
         scene_object = doc.get(obj.id) if doc is not None else None
-        _add_material_item(gscene, obj, material, page_height, scene_object, on_object_moved)
+        _add_material_item(
+            gscene, obj, material, page_height, scene_object, on_object_moved, on_drag_start, on_drag_end
+        )
 
     return gscene
 
@@ -404,6 +432,16 @@ class EditorWindow(QMainWindow):
         export_action = file_menu.addAction("&Export…")
         export_action.triggered.connect(self._on_export)
 
+        edit_menu = self.menuBar().addMenu("&Edit")
+
+        self._undo_action = edit_menu.addAction("&Undo")
+        self._undo_action.setShortcut(QKeySequence.Undo)
+        self._undo_action.triggered.connect(self._on_undo)
+
+        self._redo_action = edit_menu.addAction("&Redo")
+        self._redo_action.setShortcut(QKeySequence.Redo)
+        self._redo_action.triggered.connect(self._on_redo)
+
         self._layers_menu = self.menuBar().addMenu("&Layers")
 
     def _rebuild_layers_menu(self) -> None:
@@ -422,6 +460,14 @@ class EditorWindow(QMainWindow):
             self._hidden_layers.discard(layer)
         else:
             self._hidden_layers.add(layer)
+        self._rebuild_scene()
+
+    def _on_undo(self) -> None:
+        self.session.undo()
+        self._rebuild_scene()
+
+    def _on_redo(self) -> None:
+        self.session.redo()
         self._rebuild_scene()
 
     def _on_export(self) -> None:
@@ -471,6 +517,8 @@ class EditorWindow(QMainWindow):
             doc=doc,
             on_object_moved=self.session.sync_object,
             hidden_layers=self._hidden_layers,
+            on_drag_start=self.session.push_undo,
+            on_drag_end=self.session.autosave,
         )
         if self.session.rules:
             add_violation_overlays(gscene, self.session.violations, doc.page_height)
@@ -486,6 +534,8 @@ class EditorWindow(QMainWindow):
         if previously_selected:
             self._select_item_by_id(previously_selected)
         self._update_status_bar()
+        self._undo_action.setEnabled(self.session.can_undo)
+        self._redo_action.setEnabled(self.session.can_redo)
 
     def _update_status_bar(self) -> None:
         if not self.session.rules:
