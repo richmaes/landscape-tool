@@ -1,6 +1,6 @@
 # Landscape Rendering Tool — Task List
 
-**Status:** M0–M3 complete — M3b rule checker (or M1's leftover objects.json-to-YAML conversion) is the next work
+**Status:** M0–M3b complete — M4 material system (or M1's leftover objects.json-to-YAML conversion) is the next work
 **Last updated:** 2026-09-21
 
 ## Decisions locked in
@@ -140,20 +140,27 @@ full `scenes/example.yaml`.
 - [x] Bounding-box computation, auto-fit and explicit crop windows — `ResolvedScene.bounds()` and `.crop(x, y, width, height)` (clips every object to the window via `shapely` intersection, drops objects that fall entirely outside)
 - [x] Determinism check — same scene + seed renders identically every time — `test_resolve_scene_is_deterministic` and `test_wavy_path_is_deterministic_per_seed` compare geometry with `equals_exact(..., tolerance=0)`
 
-## M3b — Rule checker (DRC)
+## M3b — Rule checker (DRC)  *(engine and starter rules complete; editor surfacing is M8's job)*
 
 Constraints warn; they never block. The designer must be free to drag
 anything anywhere and be told afterwards what is wrong.
 
-- [ ] Rule engine over the resolved scene, emitting located, human-readable violations
-- [ ] Starter rules:
-  - [ ] No burnable material inside a keep-out zone (catches `deck_s`, currently 0.085 ft inside)
-  - [ ] Keep-out zone must be concentric with its firepit
-  - [ ] Keep-out zone must be contained by its parent region
-  - [ ] Objects must not overlap unless explicitly stacked
-  - [ ] Access clearance in front of a mechanical bay
-- [ ] Violations surface in the editor next to the offending object, not in a log
-- [ ] Rules are data, so new ones do not need code changes
+Implemented in `src/landscape/rules.py`: a fixed set of generic check
+*types* (`keepout_material_exclusion`, `concentricity`, `containment`,
+`no_overlap_unless_stacked`, `directional_clearance`), each driven by data
+in `rules/default.yaml`. 19 tests in `tests/test_rules.py`, including an
+integration run against `scenes/example.yaml` that checks exactly which
+rules fire and which stay silent.
+
+- [x] Rule engine over the resolved scene, emitting located, human-readable violations — `run_rules(scene, rules) -> list[Violation]`; `Violation.location` is a representative (x, y) point (the offending overlap's centroid where there is one) for the editor to anchor a warning to later
+- [x] Starter rules — implemented as the 5 check types above, plus real instances in `rules/default.yaml` wired against `scenes/example.yaml` (schema demo fixture, not the real backyard — see the note in that file). Once M1's leftover item lands (`objects.json` to real scene YAML), a parallel rules file should encode the real findings from `extraction/objects.md`:
+  - [x] No burnable material inside a keep-out zone (catches `deck_s`, currently 0.085 ft inside) — `keepout_material_exclusion`
+  - [x] Keep-out zone must be concentric with its firepit — `concentricity`; checks the geometric invariant directly (centroid distance), not just that a `center_of` relation exists, so it still catches drift in a hand-edited scene
+  - [x] Keep-out zone must be contained by its parent region — `containment`
+  - [x] Objects must not overlap unless explicitly stacked — `no_overlap_unless_stacked`; needed an `ignore_materials`/`exceptions` design to keep ground-cover layers (lawn, mulch) and intentionally-abutting pairs (deck-on-pad) from drowning real findings in noise
+  - [x] Access clearance in front of a mechanical bay — `directional_clearance`; the check type is generic and tested, but not wired to a real mechanical-bay object since which side it's on is still an open question (see Open Questions) — exercised against the example scene's `shed` as a stand-in
+- [ ] Violations surface in the editor next to the offending object, not in a log — genuinely needs the M8 editor to exist first; `Violation.location` is designed for this but there's no UI yet to prove it in
+- [x] Rules are data, so new ones do not need code changes — true for new *instances* of the 5 existing check types (a new entry in `rules/default.yaml`); a genuinely new *kind* of check still needs a new Python function, the same trade-off M2 made for its relation vocabulary
 
 ## M4 — Material system
 

@@ -1,0 +1,49 @@
+# Starter DRC rules (M3b). Each entry is a *rule instance*: a `type`
+# naming one of the generic checks in src/landscape/rules.py, plus the
+# data that check needs. Adding another rule of an existing type is a new
+# entry here, no code change — see the module docstring.
+#
+# Instances below are wired against scenes/example.yaml (the schema demo
+# fixture), not the real backyard concept. Once the real scene YAML exists
+# (the still-open M1 item: converting extraction/objects.json), a parallel
+# rules file should encode the real findings from extraction/objects.md —
+# e.g. deck_s sitting 0.085 ft inside the firepit keep-out.
+
+rules:
+  - id: no_burnable_in_firepit_keepout
+    type: keepout_material_exclusion
+    zone_rule: no_burnable_material
+    excluded_materials: [deck, mulch, wood, planting_bed]
+
+  - id: firepit_keepout_concentric
+    type: concentricity
+    tolerance: 0.01
+    pairs:
+      - {zone: firepit_keepout, center: firepit}
+
+  - id: firepit_keepout_contained_by_site
+    type: containment
+    tolerance: 0.0
+    pairs:
+      - {zone: firepit_keepout, parent: site_circle}
+
+  - id: no_unintended_overlaps
+    type: no_overlap_unless_stacked
+    ignore_materials: [mulch, lawn, gravel]   # ground-cover base layers, not real overlaps
+    exceptions:
+      - [hot_tub, hot_tub_pad]       # tub explicitly sits on its pad
+      - [firepit, firepit_keepout]   # the keep-out is meant to contain the firepit
+      - [deck_west, hot_tub_pad]     # deck sections abut the pad by design
+      - [deck_east, hot_tub_pad]
+      - [deck_south, hot_tub_pad]
+      - [deck_south, hot_tub]
+      - [deck_east, deck_south]
+    boolean_pairs:
+      - [lawn, bed_edge]             # lawn's boolean difference already carves this out
+
+  - id: shed_south_access_clearance
+    type: directional_clearance
+    object: shed
+    direction: south
+    distance: 3
+    ignore_materials: [lawn, mulch, gravel]
