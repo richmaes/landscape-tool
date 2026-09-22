@@ -1,13 +1,15 @@
 """Graphical editor (M8) — still an early slice, not the whole milestone.
 
 Landed so far: load a scene, show the same flat-mode picture `render_flat`
-produces, pan/zoom, select an object, drag it to move it, and use the
-properties panel to change its rotation, scale, or material. Edits mutate
-the in-memory `SceneDocument` directly (via `SceneObject.transform`, the
-per-object transform M3's geometry engine already knows how to apply) —
-still not saved back to disk, and there's no undo/redo yet. Create-object,
-relation editing, live rule-checker feedback, and round-trip saving are all
-still open — see the M8 checklist in TODO.md for the real state.
+produces, pan/zoom, select an object, drag it to move it, use the
+properties panel to change its rotation/scale/material, and save (Ctrl+S
+or File > Save/Save As) back to disk losslessly — `save_scene` writes
+through `scene_io.dump_raw` on the same `ruamel.yaml` round-trip document
+`load_raw` produced, so an object nobody touched comes back
+byte-identical, per the project's hard round-trip requirement (see
+TODO.md). There's still no undo/redo, no create-object, no relation
+editing, and no live rule-checker feedback — see the M8 checklist in
+TODO.md for the real state.
 
 Uses PySide6 (`QGraphicsScene`/`QGraphicsView`), per the UI-stack decision
 recorded in TODO.md.
@@ -22,6 +24,7 @@ not primary design objects, at least for this slice.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QWheelEvent
@@ -90,9 +93,15 @@ class EditableItem(QGraphicsPathItem):
     counting between "where Qt thinks the item is" and "what the document
     says"."""
 
-    def __init__(self, path: QPainterPath, scene_object: SceneObject):
+    def __init__(
+        self,
+        path: QPainterPath,
+        scene_object: SceneObject,
+        on_moved: Callable[[str], None] | None = None,
+    ):
         super().__init__(path)
         self.scene_object = scene_object
+        self._on_moved = on_moved
         self.setData(_OBJECT_ID_ROLE, scene_object.id)
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.ItemIsMovable, True)
@@ -106,6 +115,8 @@ class EditableItem(QGraphicsPathItem):
                 self.scene_object.transform.tx += delta.x()
                 self.scene_object.transform.ty += -delta.y()
                 self.setPath(self.path().translated(delta.x(), delta.y()))
+                if self._on_moved:
+                    self._on_moved(self.scene_object.id)
             return self.pos()  # veto Qt's own pos(); the path already moved
         return super().itemChange(change, value)
 
@@ -116,10 +127,11 @@ def _add_material_item(
     material: Material,
     page_height: float,
     scene_object: SceneObject | None = None,
+    on_moved: Callable[[str], None] | None = None,
 ) -> QGraphicsPathItem:
     path = _path_for_geometry(obj.geometry, page_height)
     if scene_object is not None:
-        item: QGraphicsPathItem = EditableItem(path, scene_object)
+        item: QGraphicsPathItem = EditableItem(path, scene_object, on_moved)
     else:
         item = QGraphicsPathItem(path)
         item.setData(_OBJECT_ID_ROLE, obj.id)
@@ -164,12 +176,15 @@ def build_graphics_scene(
     page_height: float,
     show_annotations: bool = False,
     doc: SceneDocument | None = None,
+    on_object_moved: Callable[[str], None] | None = None,
 ) -> QGraphicsScene:
     """The same picture `render_flat` draws, as interactive QGraphicsItems
     instead of a flattened cairo surface. Pass `doc` (the source
     `SceneDocument`) to make material-bearing objects selectable/movable —
     without it, this builds a read-only preview, same as before this
-    became editable."""
+    became editable. `on_object_moved(object_id)` fires after a drag bakes
+    itself into that object's transform, for anyone (the editor's
+    round-trip save) that needs to react to it."""
     gscene = QGraphicsScene()
 
     for obj in scene.paint_order():
@@ -183,7 +198,7 @@ def build_graphics_scene(
             continue
         material = materials.resolve(obj.material)
         scene_object = doc.get(obj.id) if doc is not None else None
-        _add_material_item(gscene, obj, material, page_height, scene_object)
+        _add_material_item(gscene, obj, material, page_height, scene_object, on_object_moved)
 
     return gscene
 
@@ -268,6 +283,9 @@ class EditorWindow(QMainWindow):
 
         self._materials = load_materials(materials_path)
         self._doc: SceneDocument | None = None
+        self._raw = None  # the ruamel round-trip document; source of truth for save_scene()
+        self._raw_objects: dict[str, object] = {}
+        self._scene_path: Path | None = None
         self._show_annotations = False
         self._selected_id: str | None = None
 
@@ -284,15 +302,63 @@ class EditorWindow(QMainWindow):
         splitter.setStretchFactor(1, 1)
         self.setCentralWidget(splitter)
         self.resize(1100, 800)
+        self._build_menu()
+
+    def _build_menu(self) -> None:
+        from PySide6.QtGui import QKeySequence
+        from PySide6.QtWidgets import QFileDialog
+
+        file_menu = self.menuBar().addMenu("&File")
+
+        save_action = file_menu.addAction("&Save")
+        save_action.setShortcut(QKeySequence.Save)
+        save_action.triggered.connect(lambda: self.save_scene())
+
+        save_as_action = file_menu.addAction("Save &As…")
+
+        def _save_as() -> None:
+            path, _ = QFileDialog.getSaveFileName(self, "Save Scene As", "", "Scene YAML (*.yaml)")
+            if path:
+                self.save_scene(path)
+
+        save_as_action.triggered.connect(_save_as)
 
     def load_scene(self, scene_path: str | Path, show_annotations: bool = False) -> None:
-        from .scene_io import load_scene as load_scene_doc
+        from .scene_io import load_raw, parse_scene
 
-        self._doc = load_scene_doc(scene_path)
+        self._scene_path = Path(scene_path)
+        self._raw = load_raw(scene_path)
+        self._raw_objects = {node["id"]: node for node in (self._raw.get("objects") or [])}
+        self._doc = parse_scene(self._raw)
         self._show_annotations = show_annotations
         self._rebuild_scene()
         self._view.fitInView(self._view.scene().itemsBoundingRect(), Qt.KeepAspectRatio)
         self.setWindowTitle(f"Landscape Editor — {Path(scene_path).name}")
+
+    def save_scene(self, path: str | Path | None = None) -> None:
+        """Write the raw (comment- and formatting-preserving) document
+        back out. Only objects actually edited in this session carry new
+        `material`/`transform` values (see `_sync_raw_object`) — anything
+        untouched round-trips through `load_raw`/`dump_raw` exactly as
+        M2 designed it to."""
+        from .scene_io import dump_raw
+
+        dump_raw(self._raw, path or self._scene_path)
+
+    def _sync_raw_object(self, object_id: str) -> None:
+        """Write an edited object's current material/transform into its
+        raw YAML node, so `save_scene` picks it up. Only touches this one
+        node — every other object's raw representation, comments and all,
+        is untouched."""
+        obj = self._doc.get(object_id)
+        raw_obj = self._raw_objects.get(object_id)
+        if raw_obj is None:
+            return
+        if obj.material is not None:
+            raw_obj["material"] = obj.material
+        t = obj.transform
+        if t.tx or t.ty or t.rotation or t.scale != 1.0:
+            raw_obj["transform"] = {"tx": t.tx, "ty": t.ty, "rotation": t.rotation, "scale": t.scale}
 
     def _rebuild_scene(self) -> None:
         from .geometry import resolve_scene
@@ -303,7 +369,12 @@ class EditorWindow(QMainWindow):
         previously_selected = self._selected_id
         resolved = resolve_scene(self._doc)
         gscene = build_graphics_scene(
-            resolved, self._materials, self._doc.page_height, self._show_annotations, doc=self._doc
+            resolved,
+            self._materials,
+            self._doc.page_height,
+            self._show_annotations,
+            doc=self._doc,
+            on_object_moved=self._sync_raw_object,
         )
         gscene.selectionChanged.connect(self._on_selection_changed)
         # PySide6 pitfall: QGraphicsView.setScene() doesn't keep the scene
@@ -335,14 +406,17 @@ class EditorWindow(QMainWindow):
     def _on_rotation_changed(self, value: float) -> None:
         if self._selected_id:
             self._doc.get(self._selected_id).transform.rotation = value
+            self._sync_raw_object(self._selected_id)
             self._rebuild_scene()
 
     def _on_scale_changed(self, value: float) -> None:
         if self._selected_id:
             self._doc.get(self._selected_id).transform.scale = value
+            self._sync_raw_object(self._selected_id)
             self._rebuild_scene()
 
     def _on_material_changed(self, material_id: str) -> None:
         if self._selected_id and material_id:
             self._doc.get(self._selected_id).material = material_id
+            self._sync_raw_object(self._selected_id)
             self._rebuild_scene()

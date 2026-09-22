@@ -5,7 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # must be set before any 
 
 import pytest
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtWidgets import QApplication, QGraphicsPathItem, QGraphicsSimpleTextItem
+from PySide6.QtWidgets import QGraphicsPathItem, QGraphicsSimpleTextItem
 from shapely.geometry import box
 
 from landscape.editor import EditableItem, EditorWindow, build_graphics_scene
@@ -16,12 +16,6 @@ EXAMPLE_SCENE = Path(__file__).parent.parent / "scenes" / "example.yaml"
 DEFAULT_MATERIALS = Path(__file__).parent.parent / "assets" / "materials.yaml"
 
 
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance() or QApplication([])
-    yield app
-
-
 def _obj(id, geom, material=None, z=0, annotation=False, rule=None):
     return ResolvedObject(id=id, geometry=geom, material=material, layer="default", z=z, annotation=annotation, rule=rule)
 
@@ -30,7 +24,19 @@ def _tiny_library():
     return MaterialLibrary(materials={"red": Material(id="red", name="Red", color="#FF0000")})
 
 
-def test_build_graphics_scene_creates_one_item_per_material_object(qapp):
+def _open_editor(qtbot, show_annotations: bool = True) -> EditorWindow:
+    """A loaded EditorWindow, registered with qtbot so pytest-qt owns its
+    teardown — relying on Python's GC to clean up QGraphicsScene/QWidget
+    objects (which have no Qt-parent to enforce C++ destruction order)
+    across dozens of tests in one process is what caused a real,
+    reproducible segfault during this feature's development."""
+    window = EditorWindow(materials_path=DEFAULT_MATERIALS)
+    qtbot.addWidget(window)
+    window.load_scene(EXAMPLE_SCENE, show_annotations=show_annotations)
+    return window
+
+
+def test_build_graphics_scene_creates_one_item_per_material_object(qtbot):
     scene = ResolvedScene(
         objects=[_obj("a", box(0, 0, 2, 2), material="red"), _obj("b", box(3, 3, 5, 5), material="red")]
     )
@@ -39,14 +45,14 @@ def test_build_graphics_scene_creates_one_item_per_material_object(qapp):
     assert len(path_items) == 2
 
 
-def test_material_item_is_tagged_with_object_id(qapp):
+def test_material_item_is_tagged_with_object_id(qtbot):
     scene = ResolvedScene(objects=[_obj("bed", box(0, 0, 2, 2), material="red")])
     gscene = build_graphics_scene(scene, _tiny_library(), page_height=10)
     item = gscene.items()[0]
     assert item.data(0) == "bed"
 
 
-def test_annotation_item_has_no_fill_and_dashed_pen(qapp):
+def test_annotation_item_has_no_fill_and_dashed_pen(qtbot):
     scene = ResolvedScene(objects=[_obj("marker", box(0, 0, 2, 2), material="red", annotation=True)])
     gscene = build_graphics_scene(scene, _tiny_library(), page_height=10, show_annotations=True)
     path_items = [i for i in gscene.items() if isinstance(i, QGraphicsPathItem)]
@@ -56,7 +62,7 @@ def test_annotation_item_has_no_fill_and_dashed_pen(qapp):
     assert item.pen().style() == Qt.DashLine
 
 
-def test_annotation_item_gets_a_text_label(qapp):
+def test_annotation_item_gets_a_text_label(qtbot):
     scene = ResolvedScene(objects=[_obj("marker", box(0, 0, 2, 2), material="red", annotation=True)])
     gscene = build_graphics_scene(scene, _tiny_library(), page_height=10, show_annotations=True)
     labels = [i for i in gscene.items() if isinstance(i, QGraphicsSimpleTextItem)]
@@ -64,44 +70,42 @@ def test_annotation_item_gets_a_text_label(qapp):
     assert labels[0].text() == "marker"
 
 
-def test_keepout_zone_labeled_with_its_rule(qapp):
+def test_keepout_zone_labeled_with_its_rule(qtbot):
     scene = ResolvedScene(objects=[_obj("zone", box(0, 0, 2, 2), rule="no_burnable_material")])
     gscene = build_graphics_scene(scene, _tiny_library(), page_height=10)
     labels = [i for i in gscene.items() if isinstance(i, QGraphicsSimpleTextItem)]
     assert labels[0].text() == "zone (no_burnable_material)"
 
 
-def test_annotations_excluded_by_default(qapp):
+def test_annotations_excluded_by_default(qtbot):
     scene = ResolvedScene(objects=[_obj("marker", box(0, 0, 2, 2), material="red", annotation=True)])
     gscene = build_graphics_scene(scene, _tiny_library(), page_height=10, show_annotations=False)
     assert len(gscene.items()) == 0
 
 
-def test_material_item_uses_material_fill_color(qapp):
+def test_material_item_uses_material_fill_color(qtbot):
     scene = ResolvedScene(objects=[_obj("a", box(0, 0, 2, 2), material="red")])
     gscene = build_graphics_scene(scene, _tiny_library(), page_height=10)
     item = gscene.items()[0]
     assert item.brush().color().name().lower() == "#ff0000"
 
 
-def test_editor_window_loads_example_scene(qapp):
-    window = EditorWindow(materials_path=DEFAULT_MATERIALS)
-    window.load_scene(EXAMPLE_SCENE, show_annotations=True)
+def test_editor_window_loads_example_scene(qtbot):
+    window = _open_editor(qtbot)
     assert window._view.scene() is not None
     assert len(window._view.scene().items()) > 0
     assert "example.yaml" in window.windowTitle()
 
 
-def test_editor_window_items_include_known_object_ids(qapp):
-    window = EditorWindow(materials_path=DEFAULT_MATERIALS)
-    window.load_scene(EXAMPLE_SCENE, show_annotations=True)
+def test_editor_window_items_include_known_object_ids(qtbot):
+    window = _open_editor(qtbot)
     ids = {item.data(0) for item in window._view.scene().items() if item.data(0)}
     assert "firepit" in ids
     assert "firepit_keepout" in ids
     assert "clearance_marker" in ids
 
 
-def test_material_items_are_editable_when_doc_given(qapp):
+def test_material_items_are_editable_when_doc_given(qtbot):
     scene = ResolvedScene(objects=[_obj("a", box(0, 0, 2, 2), material="red")])
     from landscape.schema import SceneDocument, SceneObject
     from landscape.schema import Rect as RectPrimitive
@@ -116,7 +120,7 @@ def test_material_items_are_editable_when_doc_given(qapp):
     assert item.scene_object is doc.get("a")
 
 
-def test_annotations_are_never_editable_even_with_doc(qapp):
+def test_annotations_are_never_editable_even_with_doc(qtbot):
     from landscape.schema import SceneDocument, SceneObject
     from landscape.schema import Rect as RectPrimitive
 
@@ -132,9 +136,8 @@ def test_annotations_are_never_editable_even_with_doc(qapp):
     assert not isinstance(item, EditableItem)
 
 
-def test_dragging_an_item_updates_the_document_transform(qapp):
-    window = EditorWindow(materials_path=DEFAULT_MATERIALS)
-    window.load_scene(EXAMPLE_SCENE, show_annotations=True)
+def test_dragging_an_item_updates_the_document_transform(qtbot):
+    window = _open_editor(qtbot)
     shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
     before = window._doc.get("shed").transform
     tx0, ty0 = before.tx, before.ty
@@ -149,9 +152,8 @@ def test_dragging_an_item_updates_the_document_transform(qapp):
     assert shed.pos() == QPointF(0, 0)
 
 
-def test_rotation_panel_edit_updates_document_and_rebuilds(qapp):
-    window = EditorWindow(materials_path=DEFAULT_MATERIALS)
-    window.load_scene(EXAMPLE_SCENE, show_annotations=True)
+def test_rotation_panel_edit_updates_document_and_rebuilds(qtbot):
+    window = _open_editor(qtbot)
     shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
     shed.setSelected(True)
 
@@ -160,9 +162,8 @@ def test_rotation_panel_edit_updates_document_and_rebuilds(qapp):
     assert window._doc.get("shed").transform.rotation == 45
 
 
-def test_selection_persists_across_a_rebuild(qapp):
-    window = EditorWindow(materials_path=DEFAULT_MATERIALS)
-    window.load_scene(EXAMPLE_SCENE, show_annotations=True)
+def test_selection_persists_across_a_rebuild(qtbot):
+    window = _open_editor(qtbot)
     shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
     shed.setSelected(True)
 
@@ -173,9 +174,8 @@ def test_selection_persists_across_a_rebuild(qapp):
     assert new_shed.isSelected()
 
 
-def test_material_panel_edit_updates_document(qapp):
-    window = EditorWindow(materials_path=DEFAULT_MATERIALS)
-    window.load_scene(EXAMPLE_SCENE, show_annotations=True)
+def test_material_panel_edit_updates_document(qtbot):
+    window = _open_editor(qtbot)
     shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
     shed.setSelected(True)
 
@@ -184,9 +184,8 @@ def test_material_panel_edit_updates_document(qapp):
     assert window._doc.get("shed").material == "water"
 
 
-def test_scale_panel_edit_updates_document(qapp):
-    window = EditorWindow(materials_path=DEFAULT_MATERIALS)
-    window.load_scene(EXAMPLE_SCENE, show_annotations=True)
+def test_scale_panel_edit_updates_document(qtbot):
+    window = _open_editor(qtbot)
     shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
     shed.setSelected(True)
 
@@ -195,9 +194,93 @@ def test_scale_panel_edit_updates_document(qapp):
     assert window._doc.get("shed").transform.scale == 2.5
 
 
-def test_deselecting_clears_the_panel(qapp):
-    window = EditorWindow(materials_path=DEFAULT_MATERIALS)
-    window.load_scene(EXAMPLE_SCENE, show_annotations=True)
+def test_save_unchanged_scene_is_byte_identical(qtbot, tmp_path):
+    window = _open_editor(qtbot)
+    out = tmp_path / "roundtrip.yaml"
+    window.save_scene(out)
+    assert out.read_text() == EXAMPLE_SCENE.read_text()
+
+
+def test_save_after_edit_only_touches_the_edited_object(qtbot, tmp_path):
+    window = _open_editor(qtbot)
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    shed.setSelected(True)
+    window._panel.rotation_spin.setValue(45)
+
+    out = tmp_path / "edited.yaml"
+    window.save_scene(out)
+
+    # every line belonging to an object other than 'shed' is untouched.
+    # The rewritten transform switches from flow to block style, so its
+    # sub-keys (now their own lines) need excluding too, not just the
+    # line that says "transform".
+    touched = ("shed", "transform", "tx:", "ty:", "rotation:", "scale:")
+    unrelated_original = [l for l in EXAMPLE_SCENE.read_text().splitlines() if not any(t in l for t in touched)]
+    unrelated_saved = [l for l in out.read_text().splitlines() if not any(t in l for t in touched)]
+    assert unrelated_original == unrelated_saved
+
+    from landscape.scene_io import load_scene as parse_saved
+
+    reloaded = parse_saved(out)
+    assert reloaded.get("shed").transform.rotation == 45
+
+
+def test_save_after_move_writes_transform_back(qtbot, tmp_path):
+    window = _open_editor(qtbot)
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    shed.setPos(QPointF(2, 3))
+
+    out = tmp_path / "moved.yaml"
+    window.save_scene(out)
+
+    from landscape.scene_io import load_scene as parse_saved
+
+    reloaded = parse_saved(out)
+    t = reloaded.get("shed").transform
+    assert t.tx == pytest.approx(2.5)  # original 0.5 + 2
+    assert t.ty == pytest.approx(-3)  # original 0 - 3
+
+
+def test_save_after_material_change_writes_material_back(qtbot, tmp_path):
+    window = _open_editor(qtbot)
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    shed.setSelected(True)
+    window._panel.material_combo.setCurrentText("water")
+
+    out = tmp_path / "material.yaml"
+    window.save_scene(out)
+
+    from landscape.scene_io import load_scene as parse_saved
+
+    assert parse_saved(out).get("shed").material == "water"
+
+
+def test_save_to_explicit_path_does_not_touch_original(qtbot, tmp_path):
+    original_bytes = EXAMPLE_SCENE.read_bytes()
+    window = _open_editor(qtbot)
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    shed.setSelected(True)
+    window._panel.rotation_spin.setValue(90)
+
+    window.save_scene(tmp_path / "elsewhere.yaml")
+
+    assert EXAMPLE_SCENE.read_bytes() == original_bytes
+
+
+def test_save_action_writes_the_file(qtbot, tmp_path, monkeypatch):
+    window = _open_editor(qtbot)
+    out = tmp_path / "via_menu.yaml"
+    monkeypatch.setattr(window, "_scene_path", out)
+
+    save_action = next(a for a in window.menuBar().actions()[0].menu().actions() if a.text() == "&Save")
+    save_action.trigger()
+
+    assert out.exists()
+    assert out.read_text() == EXAMPLE_SCENE.read_text()
+
+
+def test_deselecting_clears_the_panel(qtbot):
+    window = _open_editor(qtbot)
     shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
     shed.setSelected(True)
     assert window._panel.isEnabled()
