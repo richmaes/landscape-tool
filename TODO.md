@@ -1,6 +1,6 @@
 # Landscape Rendering Tool — Task List
 
-**Status:** M0–M5, M1, and M3b complete; M8 underway (PySide6 editor: load, pan/zoom, select, drag-move, panel-based rotate/scale/material edits, lossless save-to-disk, and live rule-checker feedback all work — the last one also closes out M3b's final open item). `scenes/backyard.yaml` is now the real design (converted from `extraction/objects.json`), not just the `scenes/example.yaml` schema fixture — see M1 for a real finding this surfaced (the documented `deck_intrudes_on_keepout` doesn't actually hold against the keepout as drawn). Still open in M8: create-objects, swatch-based material picking, relation editing, undo/redo, watch-reload, export-from-editor. M7 export is untouched.
+**Status:** M0–M5, M1, and M3b complete; M8 underway (PySide6 editor: load, pan/zoom, select, drag-move, panel-based rotate/scale/material edits, lossless save-to-disk, and live rule-checker feedback all work — the last one also closes out M3b's final open item). The editor's non-GUI logic is now factored out into `EditorSession` (`editor_session.py`, zero Qt dependency), so `EditorWindow` is a thin wrapper over it. `scenes/backyard.yaml` is now the real design (converted from `extraction/objects.json`), not just the `scenes/example.yaml` schema fixture — see M1 for a real finding this surfaced (the documented `deck_intrudes_on_keepout` doesn't actually hold against the keepout as drawn). Still open in M8: create-objects, swatch-based material picking, relation editing, undo/redo, watch-reload, export-from-editor. M7 export is untouched.
 **Last updated:** 2026-09-21
 
 ## Decisions locked in
@@ -267,9 +267,27 @@ changes what was actually touched, and — when `--rules` is given — live
 DRC feedback: a dashed highlight + marker on every object a rule
 violation names, tooltip carrying the message, recomputed on every edit
 (`add_violation_overlays()`; this also closes M3b's last open item). 29
-tests in `tests/test_editor.py` (146 total), run headless via
-`QT_QPA_PLATFORM=offscreen` and checked visually with rendered screenshots
-before writing them.
+tests in `tests/test_editor.py`, run headless via `QT_QPA_PLATFORM=offscreen`
+and checked visually with rendered screenshots before writing them.
+
+**GUI/core separation.** The rest of the project already had zero Qt
+dependency (`schema`/`scene_io`/`geometry`/`materials`/`render_flat`/`rules`
+never imported PySide6, and `landscape render` never touches it either).
+The one remaining seam was inside the editor itself: `EditorWindow` mixed
+actual widget code with orchestration logic — load/edit/sync/save/rule-
+check — that didn't need Qt at all. That's now `src/landscape/editor_session.py`
+(`EditorSession`, zero PySide6 import, verified both by a source-text
+check and by importing it in a fresh interpreter and checking
+`sys.modules`), with `EditorWindow` reduced to a thin wrapper that reads
+`session.doc`/`.resolved`/`.violations` and calls `session.set_*()`/
+`.save()`. Directly reusable for M8b's planned headless/batch CLI without
+pulling in Qt, and its own 11 tests in `tests/test_editor_session.py` run
+without `qtbot`/`QApplication` at all. Found one real latent bug while
+writing its tests: `sync_object` called `doc.get(object_id)` (which raises
+for an unknown id) before checking whether a raw node even existed for
+it — harmless in practice since it was only ever called with ids that had
+just been selected in the UI, but a real defensive-coding gap, fixed by
+checking the raw lookup first.
 
 Real bugs found only by actually exercising the interaction, not by
 reading the code:

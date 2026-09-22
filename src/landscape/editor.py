@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
 )
 from shapely.geometry.base import BaseGeometry
 
+from .editor_session import EditorSession
 from .geometry import ResolvedObject, ResolvedScene
 from .materials import Material, MaterialLibrary
 from .rules import Violation
@@ -338,6 +339,13 @@ class PropertiesPanel(QWidget):
 
 
 class EditorWindow(QMainWindow):
+    """A thin Qt wrapper around `EditorSession`: this class owns widgets,
+    draw calls, and event wiring; `self.session` owns the actual scene
+    state and edit logic, and has no Qt dependency (see
+    `editor_session.py`). Widget code reads `self.session.doc`/
+    `.resolved`/`.violations` and calls `self.session.set_*()`/`.save()`
+    rather than duplicating any of that here."""
+
     def __init__(
         self,
         materials_path: str | Path = "assets/materials.yaml",
@@ -346,21 +354,12 @@ class EditorWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Landscape Editor")
 
-        from .materials import load_materials
-        from .rules import load_rules
-
-        self._materials = load_materials(materials_path)
-        self._rules = load_rules(rules_path) if rules_path else []
-        self._violations: list[Violation] = []
-        self._doc: SceneDocument | None = None
-        self._raw = None  # the ruamel round-trip document; source of truth for save_scene()
-        self._raw_objects: dict[str, object] = {}
-        self._scene_path: Path | None = None
+        self.session = EditorSession(materials_path, rules_path)
         self._show_annotations = False
         self._selected_id: str | None = None
 
         self._view = SceneGraphicsView()
-        self._panel = PropertiesPanel(list(self._materials.materials))
+        self._panel = PropertiesPanel(list(self.session.materials.materials))
         self._panel.rotation_spin.valueChanged.connect(self._on_rotation_changed)
         self._panel.scale_spin.valueChanged.connect(self._on_scale_changed)
         self._panel.material_combo.currentTextChanged.connect(self._on_material_changed)
@@ -394,64 +393,37 @@ class EditorWindow(QMainWindow):
         save_as_action.triggered.connect(_save_as)
 
     def load_scene(self, scene_path: str | Path, show_annotations: bool = False) -> None:
-        from .scene_io import load_raw, parse_scene
-
-        self._scene_path = Path(scene_path)
-        self._raw = load_raw(scene_path)
-        self._raw_objects = {node["id"]: node for node in (self._raw.get("objects") or [])}
-        self._doc = parse_scene(self._raw)
+        self.session.load(scene_path)
         self._show_annotations = show_annotations
         self._rebuild_scene()
         self._view.fitInView(self._view.scene().itemsBoundingRect(), Qt.KeepAspectRatio)
         self.setWindowTitle(f"Landscape Editor — {Path(scene_path).name}")
 
     def save_scene(self, path: str | Path | None = None) -> None:
-        """Write the raw (comment- and formatting-preserving) document
-        back out. Only objects actually edited in this session carry new
-        `material`/`transform` values (see `_sync_raw_object`) — anything
-        untouched round-trips through `load_raw`/`dump_raw` exactly as
-        M2 designed it to."""
-        from .scene_io import dump_raw
-
-        dump_raw(self._raw, path or self._scene_path)
-
-    def _sync_raw_object(self, object_id: str) -> None:
-        """Write an edited object's current material/transform into its
-        raw YAML node, so `save_scene` picks it up. Only touches this one
-        node — every other object's raw representation, comments and all,
-        is untouched."""
-        obj = self._doc.get(object_id)
-        raw_obj = self._raw_objects.get(object_id)
-        if raw_obj is None:
-            return
-        if obj.material is not None:
-            raw_obj["material"] = obj.material
-        t = obj.transform
-        if t.tx or t.ty or t.rotation or t.scale != 1.0:
-            raw_obj["transform"] = {"tx": t.tx, "ty": t.ty, "rotation": t.rotation, "scale": t.scale}
+        self.session.save(path)
 
     def _rebuild_scene(self) -> None:
-        from .geometry import resolve_scene
-        from .rules import run_rules
+        """Qt-side rebuild: ask the session to recompute geometry and
+        violations, then turn that plain state into graphics items. The
+        session has already done the actual work by the time this runs
+        (`load_scene`/`_on_*_changed` call `session.load`/`set_*`, which
+        call `session.recompute()` themselves)."""
 
         # setScene() below fires selectionChanged for the outgoing scene's
         # deselection, which would otherwise clobber self._selected_id to
         # None (via _on_selection_changed) before the reselect step runs.
         previously_selected = self._selected_id
-        resolved = resolve_scene(self._doc)
+        doc = self.session.doc
         gscene = build_graphics_scene(
-            resolved,
-            self._materials,
-            self._doc.page_height,
+            self.session.resolved,
+            self.session.materials,
+            doc.page_height,
             self._show_annotations,
-            doc=self._doc,
-            on_object_moved=self._sync_raw_object,
+            doc=doc,
+            on_object_moved=self.session.sync_object,
         )
-        if self._rules:
-            self._violations = run_rules(resolved, self._rules)
-            add_violation_overlays(gscene, self._violations, self._doc.page_height)
-        else:
-            self._violations = []
+        if self.session.rules:
+            add_violation_overlays(gscene, self.session.violations, doc.page_height)
         gscene.selectionChanged.connect(self._on_selection_changed)
         # PySide6 pitfall: QGraphicsView.setScene() doesn't keep the scene
         # alive on Python's side. Without this reference, the C++ object
@@ -466,11 +438,11 @@ class EditorWindow(QMainWindow):
         self._update_status_bar()
 
     def _update_status_bar(self) -> None:
-        if not self._rules:
+        if not self.session.rules:
             self.statusBar().clearMessage()
-        elif self._violations:
+        elif self.session.violations:
             self.statusBar().showMessage(
-                f"{len(self._violations)} rule violation(s) — hover a highlighted object for details"
+                f"{len(self.session.violations)} rule violation(s) — hover a highlighted object for details"
             )
         else:
             self.statusBar().showMessage("No rule violations")
@@ -492,18 +464,15 @@ class EditorWindow(QMainWindow):
 
     def _on_rotation_changed(self, value: float) -> None:
         if self._selected_id:
-            self._doc.get(self._selected_id).transform.rotation = value
-            self._sync_raw_object(self._selected_id)
+            self.session.set_rotation(self._selected_id, value)
             self._rebuild_scene()
 
     def _on_scale_changed(self, value: float) -> None:
         if self._selected_id:
-            self._doc.get(self._selected_id).transform.scale = value
-            self._sync_raw_object(self._selected_id)
+            self.session.set_scale(self._selected_id, value)
             self._rebuild_scene()
 
     def _on_material_changed(self, material_id: str) -> None:
         if self._selected_id and material_id:
-            self._doc.get(self._selected_id).material = material_id
-            self._sync_raw_object(self._selected_id)
+            self.session.set_material(self._selected_id, material_id)
             self._rebuild_scene()

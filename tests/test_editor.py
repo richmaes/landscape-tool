@@ -142,12 +142,12 @@ def test_annotations_are_never_editable_even_with_doc(qtbot):
 def test_dragging_an_item_updates_the_document_transform(qtbot):
     window = _open_editor(qtbot)
     shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
-    before = window._doc.get("shed").transform
+    before = window.session.doc.get("shed").transform
     tx0, ty0 = before.tx, before.ty
 
     shed.setPos(QPointF(2, 3))  # Qt coords: +x east, +y *south*
 
-    after = window._doc.get("shed").transform
+    after = window.session.doc.get("shed").transform
     assert after.tx == pytest.approx(tx0 + 2)
     assert after.ty == pytest.approx(ty0 - 3)  # y flipped back to the scene's +y-north convention
     # the move is baked into the item's own path, not left in Qt's pos(),
@@ -162,7 +162,7 @@ def test_rotation_panel_edit_updates_document_and_rebuilds(qtbot):
 
     window._panel.rotation_spin.setValue(45)
 
-    assert window._doc.get("shed").transform.rotation == 45
+    assert window.session.doc.get("shed").transform.rotation == 45
 
 
 def test_selection_persists_across_a_rebuild(qtbot):
@@ -184,7 +184,7 @@ def test_material_panel_edit_updates_document(qtbot):
 
     window._panel.material_combo.setCurrentText("water")
 
-    assert window._doc.get("shed").material == "water"
+    assert window.session.doc.get("shed").material == "water"
 
 
 def test_scale_panel_edit_updates_document(qtbot):
@@ -194,7 +194,7 @@ def test_scale_panel_edit_updates_document(qtbot):
 
     window._panel.scale_spin.setValue(2.5)
 
-    assert window._doc.get("shed").transform.scale == 2.5
+    assert window.session.doc.get("shed").transform.scale == 2.5
 
 
 def test_save_unchanged_scene_is_byte_identical(qtbot, tmp_path):
@@ -273,7 +273,7 @@ def test_save_to_explicit_path_does_not_touch_original(qtbot, tmp_path):
 def test_save_action_writes_the_file(qtbot, tmp_path, monkeypatch):
     window = _open_editor(qtbot)
     out = tmp_path / "via_menu.yaml"
-    monkeypatch.setattr(window, "_scene_path", out)
+    monkeypatch.setattr(window.session, "scene_path", out)
 
     save_action = next(a for a in window.menuBar().actions()[0].menu().actions() if a.text() == "&Save")
     save_action.trigger()
@@ -327,7 +327,7 @@ def test_editor_computes_violations_against_real_backyard_scene(qtbot):
     qtbot.addWidget(window)
     window.load_scene(BACKYARD_SCENE, show_annotations=True)
 
-    assert {v.rule_id for v in window._violations} == {
+    assert {v.rule_id for v in window.session.violations} == {
         "no_burnable_in_firepit_keepout",
         "firepit_keepout_concentric",
         "firepit_keepout_contained_by_site",
@@ -337,7 +337,7 @@ def test_editor_computes_violations_against_real_backyard_scene(qtbot):
 
 def test_editor_without_rules_path_has_no_violations(qtbot):
     window = _open_editor(qtbot)  # no rules_path given
-    assert window._violations == []
+    assert window.session.violations == []
     assert window.statusBar().currentMessage() == ""
 
 
@@ -345,20 +345,21 @@ def test_violations_recompute_after_an_edit(qtbot):
     window = EditorWindow(materials_path=DEFAULT_MATERIALS, rules_path=BACKYARD_RULES)
     qtbot.addWidget(window)
     window.load_scene(BACKYARD_SCENE, show_annotations=True)
-    assert len(window._violations) == 3
+    assert len(window.session.violations) == 3
 
     # recentering the keepout on the firepit should clear the concentricity
     # violation specifically
-    keepout = window._doc.get("firepit_keepout")
-    firepit = window._doc.get("firepit")
+    keepout = window.session.doc.get("firepit_keepout")
+    firepit = window.session.doc.get("firepit")
     dx = firepit.primitive.cx - keepout.primitive.shape.cx
     dy = firepit.primitive.cy - keepout.primitive.shape.cy
     keepout.transform.tx += dx
     keepout.transform.ty += dy
-    window._sync_raw_object("firepit_keepout")
+    window.session.sync_object("firepit_keepout")
+    window.session.recompute()  # direct doc mutation, not via session.set_*, so recompute explicitly
     window._rebuild_scene()
 
-    assert "firepit_keepout_concentric" not in {v.rule_id for v in window._violations}
+    assert "firepit_keepout_concentric" not in {v.rule_id for v in window.session.violations}
 
 
 def test_deselecting_clears_the_panel(qtbot):
