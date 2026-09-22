@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "landscape"
+version = "0.1.0"
+description = "Landscape rendering tool: YAML scene scripts to flat and hand-drawn pastel plan renders"
+requires-python = ">=3.11"
+dependencies = [
+    "shapely>=2.0",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "pycairo>=1.25",
+    "Pillow>=10.0",
+    "svgwrite>=1.4",
+    "opensimplex>=0.4",
+    "pdfplumber>=0.11",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+landscape = "landscape.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

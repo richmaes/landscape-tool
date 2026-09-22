@@ -1,6 +1,6 @@
 # Landscape Rendering Tool — Task List
 
-**Status:** M1 extraction complete — M0 setup is the next work
+**Status:** M0 setup complete, M1 extraction complete — M2 scene schema is the next work
 **Last updated:** 2026-09-21
 
 ## Decisions locked in
@@ -61,18 +61,19 @@ orientation, water feature form) are tracked in `extraction/objects.md` under
 ## M0 — Project setup
 
 - [x] Create repo structure (`src/landscape/`, `scenes/`, `assets/`, `tests/`, `out/`)
-- [ ] `git init`, `.gitignore` (ignore `out/`, `__pycache__/`, venv)
-- [ ] Set up virtualenv + `pyproject.toml` / `requirements.txt`
-- [ ] Evaluate and pin core libraries:
-  - [ ] `shapely` — polygon ops, buffering, boolean union/difference, offsetting
-  - [ ] `numpy` / `scipy` — splines, interpolation, sampling
-  - [ ] `pycairo` or `cairosvg` — vector rendering backend
-  - [ ] `Pillow` — raster compositing, paper grain, blur
-  - [ ] `svgwrite` or direct cairo SVG surface — vector export
-  - [ ] noise library (`opensimplex` / `perlin-noise`) — wavy paths and texture variation
+- [x] `git init`, `.gitignore` (ignore `out/`, `__pycache__/`, venv)
+- [x] Set up virtualenv + `pyproject.toml` / `requirements.txt`
+- [x] Evaluate and pin core libraries:
+  - [x] `shapely` — polygon ops, buffering, boolean union/difference, offsetting
+  - [x] `numpy` / `scipy` — splines, interpolation, sampling
+  - [x] `pycairo` — vector rendering backend (chosen over `cairosvg`: native PNG/SVG/PDF surfaces from one drawing API, matches the M5/M7 rendering-abstraction plan; system `cairo` confirmed present via Homebrew)
+  - [x] `Pillow` — raster compositing, paper grain, blur
+  - [x] `svgwrite` — vector export
+  - [x] `opensimplex` — wavy paths and texture variation
   - [x] `pdfplumber` — PDF path extraction; proven on the real file in `tools/extract_pdf.py`
-  - [ ] `pytest` — tests
-- [ ] CLI entry point skeleton (`landscape render scene.yaml --mode flat --out out/plan.png`)
+  - [x] `pytest` — tests
+  - [x] `PyYAML` — not in the original list but required for the M2 scene format; added
+- [x] CLI entry point skeleton (`landscape render scene.yaml --mode flat --out out/plan.png`) — stub `render` command wired up via `pyproject.toml` `[project.scripts]`, exits 1 with "not yet implemented" until M2/M3 land; covered by `tests/test_cli.py`
 
 ## M1 — PDF to scene script  *(largely complete)*
 
