@@ -26,6 +26,7 @@ not primary design objects, at least for this slice.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Callable
 
@@ -145,6 +146,104 @@ class EditableItem(QGraphicsPathItem):
             self._dragging = False
             if self._on_drag_end:
                 self._on_drag_end()
+
+
+class SelectionHandle(QGraphicsEllipseItem):
+    """A small draggable handle for resizing (uniform scale about the
+    target's centroid — `Transform.scale` is a single uniform factor,
+    not independent width/height) or rotating a selected `EditableItem`
+    directly on the canvas, not just via the properties panel.
+
+    The live preview never touches the document — only a Qt-level item
+    transform — so there's nothing to snapshot for undo until the single
+    commit on release. `on_drag_end` is wired straight to
+    `EditorSession.set_scale`/`set_rotation`, the same calls the
+    properties panel's spinboxes already make, which each do exactly one
+    `push_undo()` + mutate + sync + recompute + autosave — "one undo
+    entry per gesture," satisfied for free rather than needing this class
+    to also bracket a gesture of its own.
+
+    Deliberately does *not* trigger a scene rebuild during or right after
+    the drag: `_rebuild_scene()` throws away the whole `QGraphicsScene`,
+    which would destroy this handle while it's still processing its own
+    mouse event — the same class of hazard as the segfault found earlier
+    in this project (an object destroyed while code still holds a live
+    reference to it). The live-preview transform stays as the visual
+    representation — already correct — until some *other* action
+    triggers the next rebuild, which then regenerates the authoritative
+    path from the committed value. `EditableItem`'s own move-drag follows
+    the same "commit, don't rebuild" precedent already."""
+
+    RADIUS = 0.3
+
+    def __init__(
+        self,
+        kind: str,  # "resize" | "rotate"
+        target: EditableItem,
+        on_drag_end: Callable[[float], None] | None,
+    ):
+        super().__init__(-self.RADIUS, -self.RADIUS, self.RADIUS * 2, self.RADIUS * 2)
+        self.kind = kind
+        self.target = target
+        self._on_drag_end = on_drag_end
+        color = QColor(30, 120, 220) if kind == "resize" else QColor(220, 140, 20)
+        self.setBrush(QBrush(color))
+        self.setPen(QPen(color.darker(150), 0.04))
+        self.setFlag(QGraphicsItem.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
+        self.setZValue(2000)
+        self.setToolTip("Drag to resize" if kind == "resize" else "Drag to rotate")
+        self._dragging = False
+        self._center = target.path().boundingRect().center()
+        self._start_distance = 1.0
+        self._start_angle = 0.0
+        self._start_scale = 1.0
+        self._start_rotation = 0.0
+        self._final_value: float | None = None
+
+    def _distance(self, pos) -> float:
+        return math.hypot(pos.x() - self._center.x(), pos.y() - self._center.y())
+
+    def _angle(self, pos) -> float:
+        return math.degrees(math.atan2(pos.y() - self._center.y(), pos.x() - self._center.x()))
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemPositionChange and self.scene() is not None:
+            if not self._dragging:
+                # A fresh gesture: re-read the target's *current* committed
+                # values, not whatever this handle was constructed with —
+                # dragging the same handle twice without an intervening
+                # rebuild must use the first drag's result as its baseline.
+                self._dragging = True
+                self._start_scale = self.target.scene_object.transform.scale
+                self._start_rotation = self.target.scene_object.transform.rotation
+                self._start_distance = max(self._distance(self.pos()), 1e-6)
+                self._start_angle = self._angle(self.pos())
+            self.target.setTransformOriginPoint(self._center)
+            if self.kind == "resize":
+                factor = self._distance(value) / self._start_distance
+                self._final_value = max(0.01, self._start_scale * factor)
+                self.target.setScale(self._final_value / self._start_scale)
+            else:
+                delta_angle = self._angle(value) - self._start_angle
+                self._final_value = self._start_rotation + delta_angle
+                self.target.setRotation(delta_angle)
+            return value
+        return super().itemChange(change, value)
+
+    def mouseReleaseEvent(self, event) -> None:
+        super().mouseReleaseEvent(event)
+        self.end_drag()
+
+    def end_drag(self) -> None:
+        """The actual commit, split out from `mouseReleaseEvent` so it's
+        directly callable without a real Qt mouse event — the same
+        testability gap `EditableItem` doesn't have (its commit happens
+        entirely in `itemChange`, driven by plain `setPos()` calls)."""
+        if self._dragging:
+            self._dragging = False
+            if self._final_value is not None and self._on_drag_end:
+                self._on_drag_end(self._final_value)
 
 
 def _add_material_item(
@@ -518,6 +617,7 @@ class EditorWindow(QMainWindow):
         self._show_annotations = False
         self._selected_id: str | None = None
         self._hidden_layers: set[str] = set()
+        self._selection_handles: list[SelectionHandle] = []
         self._layers_menu = None
 
         self._view = SceneGraphicsView()
@@ -700,9 +800,57 @@ class EditorWindow(QMainWindow):
             self._selected_id = items[0].scene_object.id
             all_ids = [o.id for o in self.session.doc.objects]
             self._panel.show_object(items[0].scene_object, all_ids)
+            self._update_selection_handles(items[0])
         else:
             self._selected_id = None
             self._panel.clear()
+            self._update_selection_handles(None)
+
+    def _update_selection_handles(self, target: EditableItem | None) -> None:
+        for handle in self._selection_handles:
+            try:
+                scene = handle.scene()
+                if scene is not None:
+                    scene.removeItem(handle)
+            except RuntimeError:
+                # The C++ object behind a previous gesture's handle may
+                # already be gone if a full rebuild replaced the whole
+                # scene since — see the module docstring on why handles
+                # never trigger a rebuild themselves, but something else
+                # (a panel edit, undo/redo, layer toggle) always can.
+                pass
+        self._selection_handles = []
+
+        if target is None:
+            return
+
+        rect = target.path().boundingRect()
+        resize_handle = SelectionHandle("resize", target, self._on_handle_resized)
+        resize_handle.setPos(rect.topRight())
+        rotate_handle = SelectionHandle("rotate", target, self._on_handle_rotated)
+        margin = max(rect.height() * 0.15, 0.5)
+        rotate_handle.setPos(rect.center().x(), rect.top() - margin)
+
+        scene = self._view.scene()
+        scene.addItem(resize_handle)
+        scene.addItem(rotate_handle)
+        self._selection_handles = [resize_handle, rotate_handle]
+
+    def _on_handle_resized(self, value: float) -> None:
+        if not self._selected_id:
+            return
+        self.session.set_scale(self._selected_id, value)
+        self._panel.scale_spin.blockSignals(True)
+        self._panel.scale_spin.setValue(value)
+        self._panel.scale_spin.blockSignals(False)
+
+    def _on_handle_rotated(self, value: float) -> None:
+        if not self._selected_id:
+            return
+        self.session.set_rotation(self._selected_id, value)
+        self._panel.rotation_spin.blockSignals(True)
+        self._panel.rotation_spin.setValue(value)
+        self._panel.rotation_spin.blockSignals(False)
 
     def _on_rotation_changed(self, value: float) -> None:
         if self._selected_id:

@@ -420,6 +420,142 @@ def test_set_relation_is_undoable_via_menu(qtbot):
     assert window.session.doc.get("deck_west").relation is None
 
 
+# --- resize/rotate selection handles ---------------------------------------
+
+
+def test_selecting_a_single_object_shows_two_handles(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    assert len(window._selection_handles) == 2
+    assert {h.kind for h in window._selection_handles} == {"resize", "rotate"}
+
+
+def test_deselecting_removes_handles(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    window._view.scene().clearSelection()
+    assert window._selection_handles == []
+
+
+def test_resize_handle_updates_scale_and_syncs_panel(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    resize_handle = next(h for h in window._selection_handles if h.kind == "resize")
+
+    resize_handle.setPos(resize_handle.pos() * 2)
+    resize_handle.end_drag()
+
+    new_scale = window.session.doc.get("shed").transform.scale
+    assert new_scale > 1.0
+    assert window._panel.scale_spin.value() == pytest.approx(new_scale, abs=0.01)
+
+
+def test_rotate_handle_updates_rotation_and_syncs_panel(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    before = window.session.doc.get("shed").transform.rotation  # shed starts at 5 degrees, not 0
+    rotate_handle = next(h for h in window._selection_handles if h.kind == "rotate")
+
+    center = rotate_handle._center
+    rotate_handle.setPos(QPointF(center.x() + 3, center.y()))  # due 'east' of center: a 90-degree move
+
+    rotate_handle.end_drag()
+
+    after = window.session.doc.get("shed").transform.rotation
+    assert after == pytest.approx(before + 90.0, abs=0.5)
+    assert window._panel.rotation_spin.value() == pytest.approx(after, abs=0.5)
+
+
+def test_resize_gesture_pushes_exactly_one_undo_entry(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    resize_handle = next(h for h in window._selection_handles if h.kind == "resize")
+    depth_before = len(window.session._undo_stack)
+
+    resize_handle.setPos(resize_handle.pos() * 1.2)
+    resize_handle.setPos(resize_handle.pos() * 1.3)  # still the same gesture: itemChange keeps firing
+    resize_handle.end_drag()
+
+    assert len(window.session._undo_stack) - depth_before == 1
+
+
+def test_resize_is_undoable(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    before = window.session.doc.get("shed").transform.scale
+    resize_handle = next(h for h in window._selection_handles if h.kind == "resize")
+    resize_handle.setPos(resize_handle.pos() * 2)
+    resize_handle.end_drag()
+
+    window._on_undo()
+
+    assert window.session.doc.get("shed").transform.scale == before
+
+
+def _pos_at_distance_factor(handle, factor: float) -> QPointF:
+    """A position `factor` times as far from the handle's captured center
+    as its current position — NOT `handle.pos() * factor`, which moves
+    relative to the scene *origin*, not the object's center; the two only
+    coincide when the center happens to sit at (0, 0). A real mismatch
+    found while testing this: a naive `pos() * 0.5` after the center was
+    nowhere near the origin produced a wildly different distance ratio
+    than intended, though the underlying resize math was correct all along."""
+    center = handle._center
+    current = handle.pos()
+    return QPointF(center.x() + (current.x() - center.x()) * factor, center.y() + (current.y() - center.y()) * factor)
+
+
+def test_second_drag_on_same_handle_uses_updated_baseline(qtbot):
+    """Dragging the same handle instance twice without an intervening
+    rebuild must use the first drag's committed result as its baseline,
+    not whatever the handle was constructed with."""
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    resize_handle = next(h for h in window._selection_handles if h.kind == "resize")
+
+    resize_handle.setPos(_pos_at_distance_factor(resize_handle, 2.0))
+    resize_handle.end_drag()
+    scale_after_first = window.session.doc.get("shed").transform.scale
+
+    resize_handle.setPos(_pos_at_distance_factor(resize_handle, 0.5))
+    resize_handle.end_drag()
+    scale_after_second = window.session.doc.get("shed").transform.scale
+
+    assert scale_after_second == pytest.approx(scale_after_first * 0.5, rel=0.05)
+
+
+def test_rebuild_while_handles_are_active_does_not_crash(qtbot):
+    """A real risk given this project's history: _rebuild_scene() replaces
+    the whole QGraphicsScene, which could destroy a still-referenced
+    handle. Anything that triggers an unrelated rebuild while handles
+    exist must not crash, and must leave fresh, usable handles behind."""
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")  # 'shed' is on the 'structures' layer
+
+    window._on_layer_toggled("ground", False)  # a layer 'shed' is NOT on
+    window._on_layer_toggled("ground", True)
+
+    assert len(window._selection_handles) == 2
+    # the refreshed handles are live, working objects, not stale references
+    resize_handle = next(h for h in window._selection_handles if h.kind == "resize")
+    before = window.session.doc.get("shed").transform.scale
+    resize_handle.setPos(_pos_at_distance_factor(resize_handle, 1.5))
+    resize_handle.end_drag()
+    assert window.session.doc.get("shed").transform.scale != before
+
+
+def test_handles_positioned_at_target_bounding_box(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    target = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    rect = target.path().boundingRect()
+
+    resize_handle = next(h for h in window._selection_handles if h.kind == "resize")
+    rotate_handle = next(h for h in window._selection_handles if h.kind == "rotate")
+    assert resize_handle.pos() == rect.topRight()
+    assert rotate_handle.pos().y() < rect.top()  # above the object, not on it
+
+
 def test_save_unchanged_scene_is_byte_identical(qtbot, tmp_path):
     window = _open_editor(qtbot)
     out = tmp_path / "roundtrip.yaml"
