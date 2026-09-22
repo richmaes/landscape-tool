@@ -198,7 +198,7 @@ def test_material_panel_edit_updates_document(qtbot):
     shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
     shed.setSelected(True)
 
-    window._panel.material_combo.setCurrentText("water")
+    window._panel.material_combo.setCurrentIndex(window._panel.material_combo.findData("water"))
 
     assert window.session.doc.get("shed").material == "water"
 
@@ -211,6 +211,32 @@ def test_scale_panel_edit_updates_document(qtbot):
     window._panel.scale_spin.setValue(2.5)
 
     assert window.session.doc.get("shed").transform.scale == 2.5
+
+
+def test_material_combo_shows_swatch_icons(qtbot):
+    window = _open_editor(qtbot)
+    combo = window._panel.material_combo
+    assert combo.count() > 0
+    for i in range(combo.count()):
+        assert not combo.itemIcon(i).isNull(), f"item {i} ({combo.itemText(i)!r}) has no swatch icon"
+
+
+def test_material_combo_items_sorted_by_display_name_with_id_as_data(qtbot):
+    window = _open_editor(qtbot)
+    combo = window._panel.material_combo
+    names = [combo.itemText(i) for i in range(combo.count())]
+    assert names == sorted(names)
+    # display text is the human name ("Water"), not the raw id ("water")
+    water_index = combo.findData("water")
+    assert water_index >= 0
+    assert combo.itemText(water_index) == "Water"
+
+
+def test_show_object_selects_matching_material_by_id(qtbot):
+    window = _open_editor(qtbot)
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    shed.setSelected(True)  # shed's material in example.yaml is 'deck'
+    assert window._panel.material_combo.currentData() == "deck"
 
 
 def test_save_unchanged_scene_is_byte_identical(qtbot, tmp_path):
@@ -264,7 +290,7 @@ def test_save_after_material_change_writes_material_back(qtbot, tmp_path):
     window = _open_editor(qtbot)
     shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
     shed.setSelected(True)
-    window._panel.material_combo.setCurrentText("water")
+    window._panel.material_combo.setCurrentIndex(window._panel.material_combo.findData("water"))
 
     out = tmp_path / "material.yaml"
     window.save_scene(out)

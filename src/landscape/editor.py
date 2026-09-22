@@ -332,12 +332,27 @@ class SceneGraphicsView(QGraphicsView):
             super().keyReleaseEvent(event)
 
 
-class PropertiesPanel(QWidget):
-    """Rotate/scale/reassign-material for whatever's selected. Not a
-    swatch picker yet (M4's `render_swatch()` exists for that, just not
-    wired in here) — a name-only combo box for now."""
+def _swatch_icon(material: Material, size: int = 16) -> "QIcon":
+    """A colored icon for `material`, via M4's `render_swatch()` (a flat
+    PIL image) converted to a `QIcon` — "the designer chooses materials
+    by appearance and name, never by hex code," per M4's own design
+    intent, finally wired into the one place that still asked by name."""
+    from PySide6.QtGui import QIcon, QImage, QPixmap
 
-    def __init__(self, material_ids: list[str], parent: QWidget | None = None):
+    from .materials import render_swatch
+
+    img = render_swatch(material, size=size).convert("RGB")
+    data = img.tobytes("raw", "RGB")
+    qimage = QImage(data, img.width, img.height, img.width * 3, QImage.Format_RGB888).copy()
+    return QIcon(QPixmap.fromImage(qimage))
+
+
+class PropertiesPanel(QWidget):
+    """Rotate/scale/reassign-material for whatever's selected. The
+    material field is a combo box, but each entry carries a swatch icon
+    generated from the actual material, not just its name."""
+
+    def __init__(self, materials: MaterialLibrary, parent: QWidget | None = None):
         super().__init__(parent)
         self.id_label = QLabel("—")
         self.rotation_spin = QDoubleSpinBox()
@@ -347,7 +362,8 @@ class PropertiesPanel(QWidget):
         self.scale_spin.setRange(0.01, 100)
         self.scale_spin.setSingleStep(0.05)
         self.material_combo = QComboBox()
-        self.material_combo.addItems(material_ids)
+        for material_id, material in sorted(materials.materials.items(), key=lambda kv: kv[1].name):
+            self.material_combo.addItem(_swatch_icon(material), material.name, userData=material_id)
 
         layout = QFormLayout(self)
         layout.addRow("Object", self.id_label)
@@ -362,7 +378,7 @@ class PropertiesPanel(QWidget):
             widget.blockSignals(True)
         self.rotation_spin.setValue(obj.transform.rotation)
         self.scale_spin.setValue(obj.transform.scale)
-        index = self.material_combo.findText(obj.material or "")
+        index = self.material_combo.findData(obj.material or "")
         self.material_combo.setCurrentIndex(index)
         for widget in (self.rotation_spin, self.scale_spin, self.material_combo):
             widget.blockSignals(False)
@@ -396,10 +412,10 @@ class EditorWindow(QMainWindow):
         self._layers_menu = None
 
         self._view = SceneGraphicsView()
-        self._panel = PropertiesPanel(list(self.session.materials.materials))
+        self._panel = PropertiesPanel(self.session.materials)
         self._panel.rotation_spin.valueChanged.connect(self._on_rotation_changed)
         self._panel.scale_spin.valueChanged.connect(self._on_scale_changed)
-        self._panel.material_combo.currentTextChanged.connect(self._on_material_changed)
+        self._panel.material_combo.currentIndexChanged.connect(self._on_material_changed)
 
         splitter = QSplitter()
         splitter.addWidget(self._view)
@@ -572,7 +588,8 @@ class EditorWindow(QMainWindow):
             self.session.set_scale(self._selected_id, value)
             self._rebuild_scene()
 
-    def _on_material_changed(self, material_id: str) -> None:
+    def _on_material_changed(self, index: int) -> None:
+        material_id = self._panel.material_combo.itemData(index)
         if self._selected_id and material_id:
             self.session.set_material(self._selected_id, material_id)
             self._rebuild_scene()
