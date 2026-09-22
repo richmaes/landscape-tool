@@ -57,6 +57,9 @@ def build_parser() -> argparse.ArgumentParser:
     edit.add_argument(
         "--show-annotations", action="store_true", help="Show annotation objects (technical view)"
     )
+    edit.add_argument(
+        "--rules", default=None, help="Path to a rules YAML file for live rule-checker feedback"
+    )
 
     return parser
 
@@ -95,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
         from .editor import EditorWindow
 
         app = QApplication.instance() or QApplication(sys.argv[:1])
-        window = EditorWindow(materials_path=args.materials)
+        window = EditorWindow(materials_path=args.materials, rules_path=args.rules)
         window.load_scene(args.scene, show_annotations=args.show_annotations)
         window.show()
         return app.exec()

@@ -1,6 +1,6 @@
 # Landscape Rendering Tool — Task List
 
-**Status:** M0–M5, M1, and M3b complete; M8 underway (PySide6 editor: load, pan/zoom, select, drag-move, panel-based rotate/scale/material edits, and lossless save-to-disk all work). `scenes/backyard.yaml` is now the real design (converted from `extraction/objects.json`), not just the `scenes/example.yaml` schema fixture — see M1 for a real finding this surfaced (the documented `deck_intrudes_on_keepout` doesn't actually hold against the keepout as drawn). Still open in M8: create-objects, swatch-based material picking, relation editing, live rule-checker overlay, undo/redo, watch-reload, export-from-editor. M7 export is untouched.
+**Status:** M0–M5, M1, and M3b complete; M8 underway (PySide6 editor: load, pan/zoom, select, drag-move, panel-based rotate/scale/material edits, lossless save-to-disk, and live rule-checker feedback all work — the last one also closes out M3b's final open item). `scenes/backyard.yaml` is now the real design (converted from `extraction/objects.json`), not just the `scenes/example.yaml` schema fixture — see M1 for a real finding this surfaced (the documented `deck_intrudes_on_keepout` doesn't actually hold against the keepout as drawn). Still open in M8: create-objects, swatch-based material picking, relation editing, undo/redo, watch-reload, export-from-editor. M7 export is untouched.
 **Last updated:** 2026-09-21
 
 ## Decisions locked in
@@ -170,7 +170,7 @@ full `scenes/example.yaml`.
 - [x] Bounding-box computation, auto-fit and explicit crop windows — `ResolvedScene.bounds()` and `.crop(x, y, width, height)` (clips every object to the window via `shapely` intersection, drops objects that fall entirely outside)
 - [x] Determinism check — same scene + seed renders identically every time — `test_resolve_scene_is_deterministic` and `test_wavy_path_is_deterministic_per_seed` compare geometry with `equals_exact(..., tolerance=0)`
 
-## M3b — Rule checker (DRC)  *(engine and starter rules complete; editor surfacing is M8's job)*
+## M3b — Rule checker (DRC)  *(complete)*
 
 Constraints warn; they never block. The designer must be free to drag
 anything anywhere and be told afterwards what is wrong.
@@ -189,7 +189,7 @@ rules fire and which stay silent.
   - [x] Keep-out zone must be contained by its parent region — `containment`
   - [x] Objects must not overlap unless explicitly stacked — `no_overlap_unless_stacked`; needed an `ignore_materials`/`exceptions` design to keep ground-cover layers (lawn, mulch) and intentionally-abutting pairs (deck-on-pad) from drowning real findings in noise
   - [x] Access clearance in front of a mechanical bay — `directional_clearance`; the check type is generic and tested, but not wired to a real mechanical-bay object since which side it's on is still an open question (see Open Questions) — exercised against the example scene's `shed` as a stand-in
-- [ ] Violations surface in the editor next to the offending object, not in a log — genuinely needs the M8 editor to exist first; `Violation.location` is designed for this but there's no UI yet to prove it in
+- [x] Violations surface in the editor next to the offending object, not in a log — `add_violation_overlays()` in `src/landscape/editor.py`: a dashed red highlight on every object a violation names, plus a marker at its location, both carrying the violation's message as a hover tooltip; recomputed on every edit. `landscape edit scene.yaml --rules rules/backyard.yaml`. See M8 below.
 - [x] Rules are data, so new ones do not need code changes — true for new *instances* of the 5 existing check types (a new entry in `rules/default.yaml`); a genuinely new *kind* of check still needs a new Python function, the same trade-off M2 made for its relation vocabulary
 
 ## M4 — Material system  *(complete)*
@@ -263,9 +263,13 @@ to change rotation/scale/material, and **Ctrl+S / File > Save saves back
 to disk losslessly** — edits mutate the in-memory `SceneDocument`'s
 `Transform`/`material` and are mirrored into the corresponding node of the
 raw `ruamel.yaml` document, so `save_scene()` (via M2's `dump_raw`) only
-changes what was actually touched. 23 tests in `tests/test_editor.py` (132
-total), run headless via `QT_QPA_PLATFORM=offscreen` and checked visually
-with rendered screenshots before writing them.
+changes what was actually touched, and — when `--rules` is given — live
+DRC feedback: a dashed highlight + marker on every object a rule
+violation names, tooltip carrying the message, recomputed on every edit
+(`add_violation_overlays()`; this also closes M3b's last open item). 29
+tests in `tests/test_editor.py` (146 total), run headless via
+`QT_QPA_PLATFORM=offscreen` and checked visually with rendered screenshots
+before writing them.
 
 Real bugs found only by actually exercising the interaction, not by
 reading the code:
@@ -296,7 +300,7 @@ reading the code:
 - [ ] Create objects from a palette of the M2 primitives
 - [ ] Material assignment by visual swatch — the properties panel's material field is a name-only combo box; M4's `render_swatch()` exists but isn't wired in here yet
 - [ ] Edit relations as simple controls (a "keep centred on firepit" checkbox, a mirror link)
-- [ ] Live rule-checker feedback attached to the offending object
+- [x] Live rule-checker feedback attached to the offending object — `add_violation_overlays()`; try `landscape edit scenes/backyard.yaml --rules rules/backyard.yaml --show-annotations`
 - [ ] **Undo/redo**, and autosave that never silently discards hand edits — save is manual (Ctrl+S) only; no undo stack yet
 - [x] Lossless round-trip: load YAML, edit, save, and a file the editor has not
       changed comes back byte-identical — `save_scene()`; verified both ways: an unchanged load-then-save reproduces the source file byte-for-byte, and an edited save touches only the edited object's `material`/`transform` (a cosmetic caveat: a rewritten `transform` switches from whatever flow/block style it had to block style, since it's written as a plain dict — acceptable since the guarantee is about *untouched* content, not about preserving formatting on a value just overwritten)

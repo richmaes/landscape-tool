@@ -2,13 +2,14 @@
 
 Landed so far: load a scene, show the same flat-mode picture `render_flat`
 produces, pan/zoom, select an object, drag it to move it, use the
-properties panel to change its rotation/scale/material, and save (Ctrl+S
-or File > Save/Save As) back to disk losslessly — `save_scene` writes
-through `scene_io.dump_raw` on the same `ruamel.yaml` round-trip document
-`load_raw` produced, so an object nobody touched comes back
-byte-identical, per the project's hard round-trip requirement (see
-TODO.md). There's still no undo/redo, no create-object, no relation
-editing, and no live rule-checker feedback — see the M8 checklist in
+properties panel to change its rotation/scale/material, save (Ctrl+S or
+File > Save/Save As) back to disk losslessly, and — if a rules file is
+given — live rule-checker feedback: a marker at each violation's location
+plus a dashed highlight on every object it names, both carrying the
+violation's message as a tooltip, recomputed on every edit. This also
+closes M3b's last open item ("violations surface in the editor next to
+the offending object, not in a log"). There's still no undo/redo,
+no create-object, and no relation editing — see the M8 checklist in
 TODO.md for the real state.
 
 Uses PySide6 (`QGraphicsScene`/`QGraphicsView`), per the UI-stack decision
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsPathItem,
     QGraphicsScene,
@@ -46,6 +48,7 @@ from shapely.geometry.base import BaseGeometry
 
 from .geometry import ResolvedObject, ResolvedScene
 from .materials import Material, MaterialLibrary
+from .rules import Violation
 from .schema import SceneDocument, SceneObject
 
 _OBJECT_ID_ROLE = 0
@@ -203,6 +206,66 @@ def build_graphics_scene(
     return gscene
 
 
+_VIOLATION_COLOR = QColor(214, 39, 39)
+
+
+def add_violation_overlays(gscene: QGraphicsScene, violations: list[Violation], page_height: float) -> None:
+    """Closes M3b's last open item: a dashed highlight on every object a
+    violation names, plus a marker at its location, both carrying the
+    violation's message as a tooltip — feedback attached to the
+    offending object, not logged somewhere separate from it."""
+
+    items_by_id = {
+        item.data(_OBJECT_ID_ROLE): item for item in gscene.items() if item.data(_OBJECT_ID_ROLE)
+    }
+
+    for violation in violations:
+        tooltip = f"[{violation.rule_id}] {violation.message}"
+        for object_id in violation.object_ids:
+            item = items_by_id.get(object_id)
+            if item is None or not isinstance(item, QGraphicsPathItem):
+                continue
+            highlight = QGraphicsPathItem(item.path())
+            pen = QPen(_VIOLATION_COLOR)
+            pen.setWidthF(0.08)
+            pen.setStyle(Qt.DashLine)
+            highlight.setPen(pen)
+            highlight.setBrush(QBrush(Qt.NoBrush))
+            highlight.setZValue(999)
+            highlight.setToolTip(tooltip)
+            gscene.addItem(highlight)
+
+        _add_violation_marker(gscene, violation, page_height, tooltip)
+
+
+def _add_violation_marker(
+    gscene: QGraphicsScene, violation: Violation, page_height: float, tooltip: str
+) -> None:
+    x, y = violation.location
+    qx, qy = x, page_height - y
+    radius = 0.5
+
+    marker = QGraphicsEllipseItem(qx - radius, qy - radius, radius * 2, radius * 2)
+    marker.setBrush(QBrush(_VIOLATION_COLOR))
+    marker.setPen(QPen(QColor(120, 0, 0), 0.04))
+    marker.setZValue(1000)
+    marker.setToolTip(tooltip)
+    gscene.addItem(marker)
+
+    bang = QGraphicsSimpleTextItem("!")
+    font = bang.font()
+    font.setPointSizeF(radius * 1.6)
+    font.setBold(True)
+    bang.setFont(font)
+    bang.setBrush(QBrush(QColor(255, 255, 255)))
+    bang.setZValue(1001)
+    bang.setToolTip(tooltip)
+    text_width = bang.boundingRect().width()
+    text_height = bang.boundingRect().height()
+    bang.setPos(qx - text_width / 2, qy - text_height / 2)
+    gscene.addItem(bang)
+
+
 class SceneGraphicsView(QGraphicsView):
     """Zoom on the wheel; pan while space is held (matching common
     design-tool convention); plain drag otherwise selects/moves items —
@@ -275,13 +338,20 @@ class PropertiesPanel(QWidget):
 
 
 class EditorWindow(QMainWindow):
-    def __init__(self, materials_path: str | Path = "assets/materials.yaml"):
+    def __init__(
+        self,
+        materials_path: str | Path = "assets/materials.yaml",
+        rules_path: str | Path | None = None,
+    ):
         super().__init__()
         self.setWindowTitle("Landscape Editor")
 
         from .materials import load_materials
+        from .rules import load_rules
 
         self._materials = load_materials(materials_path)
+        self._rules = load_rules(rules_path) if rules_path else []
+        self._violations: list[Violation] = []
         self._doc: SceneDocument | None = None
         self._raw = None  # the ruamel round-trip document; source of truth for save_scene()
         self._raw_objects: dict[str, object] = {}
@@ -362,6 +432,7 @@ class EditorWindow(QMainWindow):
 
     def _rebuild_scene(self) -> None:
         from .geometry import resolve_scene
+        from .rules import run_rules
 
         # setScene() below fires selectionChanged for the outgoing scene's
         # deselection, which would otherwise clobber self._selected_id to
@@ -376,6 +447,11 @@ class EditorWindow(QMainWindow):
             doc=self._doc,
             on_object_moved=self._sync_raw_object,
         )
+        if self._rules:
+            self._violations = run_rules(resolved, self._rules)
+            add_violation_overlays(gscene, self._violations, self._doc.page_height)
+        else:
+            self._violations = []
         gscene.selectionChanged.connect(self._on_selection_changed)
         # PySide6 pitfall: QGraphicsView.setScene() doesn't keep the scene
         # alive on Python's side. Without this reference, the C++ object
@@ -387,6 +463,17 @@ class EditorWindow(QMainWindow):
         self._view.setTransform(old_transform)
         if previously_selected:
             self._select_item_by_id(previously_selected)
+        self._update_status_bar()
+
+    def _update_status_bar(self) -> None:
+        if not self._rules:
+            self.statusBar().clearMessage()
+        elif self._violations:
+            self.statusBar().showMessage(
+                f"{len(self._violations)} rule violation(s) — hover a highlighted object for details"
+            )
+        else:
+            self.statusBar().showMessage("No rule violations")
 
     def _select_item_by_id(self, object_id: str) -> None:
         for item in self._view.scene().items():

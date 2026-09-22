@@ -31,6 +31,13 @@ def test_edit_parses_expected_args():
     assert args.scene == "scene.yaml"
     assert args.materials == "custom.yaml"
     assert args.show_annotations is True
+    assert args.rules is None
+
+
+def test_edit_parses_rules_arg():
+    parser = build_parser()
+    args = parser.parse_args(["edit", "scene.yaml", "--rules", "rules/backyard.yaml"])
+    assert args.rules == "rules/backyard.yaml"
 
 
 def test_art_mode_not_yet_implemented(capsys):

@@ -8,11 +8,14 @@ from PySide6.QtCore import QPointF, Qt
 from PySide6.QtWidgets import QGraphicsPathItem, QGraphicsSimpleTextItem
 from shapely.geometry import box
 
-from landscape.editor import EditableItem, EditorWindow, build_graphics_scene
+from landscape.editor import EditableItem, EditorWindow, add_violation_overlays, build_graphics_scene
 from landscape.geometry import ResolvedObject, ResolvedScene
 from landscape.materials import Material, MaterialLibrary
+from landscape.rules import Violation
 
 EXAMPLE_SCENE = Path(__file__).parent.parent / "scenes" / "example.yaml"
+BACKYARD_SCENE = Path(__file__).parent.parent / "scenes" / "backyard.yaml"
+BACKYARD_RULES = Path(__file__).parent.parent / "rules" / "backyard.yaml"
 DEFAULT_MATERIALS = Path(__file__).parent.parent / "assets" / "materials.yaml"
 
 
@@ -277,6 +280,85 @@ def test_save_action_writes_the_file(qtbot, tmp_path, monkeypatch):
 
     assert out.exists()
     assert out.read_text() == EXAMPLE_SCENE.read_text()
+
+
+def test_add_violation_overlays_highlights_named_objects(qtbot):
+    scene = ResolvedScene(objects=[_obj("a", box(0, 0, 2, 2), material="red")])
+    gscene = build_graphics_scene(scene, _tiny_library(), page_height=10)
+    violation = Violation(rule_id="r1", object_ids=["a"], message="test violation", location=(1, 1))
+
+    add_violation_overlays(gscene, [violation], page_height=10)
+
+    highlights = [
+        i
+        for i in gscene.items()
+        if isinstance(i, QGraphicsPathItem) and i.data(0) is None and i.toolTip()
+    ]
+    assert len(highlights) == 1
+    assert "test violation" in highlights[0].toolTip()
+    assert highlights[0].pen().style() == Qt.DashLine
+
+
+def test_add_violation_overlays_adds_a_marker_with_tooltip(qtbot):
+    scene = ResolvedScene(objects=[_obj("a", box(0, 0, 2, 2), material="red")])
+    gscene = build_graphics_scene(scene, _tiny_library(), page_height=10)
+    violation = Violation(rule_id="r1", object_ids=["a"], message="test violation", location=(1, 1))
+
+    before = len(gscene.items())
+    add_violation_overlays(gscene, [violation], page_height=10)
+
+    new_items = [i for i in gscene.items() if i.toolTip()]
+    assert len(gscene.items()) > before
+    assert any("[r1] test violation" in i.toolTip() for i in new_items)
+
+
+def test_no_overlays_added_when_no_violations(qtbot):
+    scene = ResolvedScene(objects=[_obj("a", box(0, 0, 2, 2), material="red")])
+    gscene = build_graphics_scene(scene, _tiny_library(), page_height=10)
+    before = len(gscene.items())
+
+    add_violation_overlays(gscene, [], page_height=10)
+
+    assert len(gscene.items()) == before
+
+
+def test_editor_computes_violations_against_real_backyard_scene(qtbot):
+    window = EditorWindow(materials_path=DEFAULT_MATERIALS, rules_path=BACKYARD_RULES)
+    qtbot.addWidget(window)
+    window.load_scene(BACKYARD_SCENE, show_annotations=True)
+
+    assert {v.rule_id for v in window._violations} == {
+        "no_burnable_in_firepit_keepout",
+        "firepit_keepout_concentric",
+        "firepit_keepout_contained_by_site",
+    }
+    assert "3 rule violation" in window.statusBar().currentMessage()
+
+
+def test_editor_without_rules_path_has_no_violations(qtbot):
+    window = _open_editor(qtbot)  # no rules_path given
+    assert window._violations == []
+    assert window.statusBar().currentMessage() == ""
+
+
+def test_violations_recompute_after_an_edit(qtbot):
+    window = EditorWindow(materials_path=DEFAULT_MATERIALS, rules_path=BACKYARD_RULES)
+    qtbot.addWidget(window)
+    window.load_scene(BACKYARD_SCENE, show_annotations=True)
+    assert len(window._violations) == 3
+
+    # recentering the keepout on the firepit should clear the concentricity
+    # violation specifically
+    keepout = window._doc.get("firepit_keepout")
+    firepit = window._doc.get("firepit")
+    dx = firepit.primitive.cx - keepout.primitive.shape.cx
+    dy = firepit.primitive.cy - keepout.primitive.shape.cy
+    keepout.transform.tx += dx
+    keepout.transform.ty += dy
+    window._sync_raw_object("firepit_keepout")
+    window._rebuild_scene()
+
+    assert "firepit_keepout_concentric" not in {v.rule_id for v in window._violations}
 
 
 def test_deselecting_clears_the_panel(qtbot):
