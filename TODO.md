@@ -43,7 +43,7 @@ orientation, water feature form) are tracked in `extraction/objects.md` under
 
 ## M0 — Project setup
 
-- [ ] Create repo structure (`src/landscape/`, `scenes/`, `assets/`, `tests/`, `out/`)
+- [x] Create repo structure (`src/landscape/`, `scenes/`, `assets/`, `tests/`, `out/`)
 - [ ] `git init`, `.gitignore` (ignore `out/`, `__pycache__/`, venv)
 - [ ] Set up virtualenv + `pyproject.toml` / `requirements.txt`
 - [ ] Evaluate and pin core libraries:
