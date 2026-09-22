@@ -492,6 +492,49 @@ def test_resize_is_undoable(qtbot):
     assert window.session.doc.get("shed").transform.scale == before
 
 
+def test_resize_cannot_exceed_the_per_gesture_clamp(qtbot):
+    """A real bug, not a hypothetical: dragging a resize handle far
+    enough used to blow the scale up unboundedly. A single gesture can
+    now change scale by at most SelectionHandle.MAX_GESTURE_FACTOR, no
+    matter how far the mouse moves."""
+    from landscape.editor import SelectionHandle
+
+    window = _open_editor(qtbot)
+    _select_only(window, "deck_south")  # a thin, wide object — the shape that triggered this bug
+    resize_handle = next(h for h in window._selection_handles if h.kind == "resize")
+
+    # a huge drag, far beyond anything a real gesture would produce
+    resize_handle.setPos(resize_handle.pos() + QPointF(500, 500))
+    resize_handle.end_drag()
+
+    new_scale = window.session.doc.get("deck_south").transform.scale
+    assert new_scale == pytest.approx(SelectionHandle.MAX_GESTURE_FACTOR, abs=0.01)
+
+
+def test_resize_is_less_sensitive_when_zoomed_out(qtbot):
+    """The other half of the same bug: the same absolute scene-space drag
+    distance must produce a smaller scale change when the view is zoomed
+    out, since a zoomed-out view means that same scene distance
+    corresponds to a smaller physical mouse movement."""
+    window_zoomed_in = _open_editor(qtbot)
+    _select_only(window_zoomed_in, "deck_south")
+    handle_in = next(h for h in window_zoomed_in._selection_handles if h.kind == "resize")
+    drag_offset = QPointF(5, 0)
+    handle_in.setPos(handle_in.pos() + drag_offset)
+    handle_in.end_drag()
+    scale_zoomed_in = window_zoomed_in.session.doc.get("deck_south").transform.scale
+
+    window_zoomed_out = _open_editor(qtbot)
+    window_zoomed_out._view.scale(0.1, 0.1)  # zoom out 10x from the same starting point
+    _select_only(window_zoomed_out, "deck_south")
+    handle_out = next(h for h in window_zoomed_out._selection_handles if h.kind == "resize")
+    handle_out.setPos(handle_out.pos() + drag_offset)  # the SAME scene-space drag distance
+    handle_out.end_drag()
+    scale_zoomed_out = window_zoomed_out.session.doc.get("deck_south").transform.scale
+
+    assert abs(scale_zoomed_out - 1.0) < abs(scale_zoomed_in - 1.0)
+
+
 def _pos_at_distance_factor(handle, factor: float) -> QPointF:
     """A position `factor` times as far from the handle's captured center
     as its current position — NOT `handle.pos() * factor`, which moves
@@ -516,12 +559,14 @@ def test_second_drag_on_same_handle_uses_updated_baseline(qtbot):
     resize_handle.setPos(_pos_at_distance_factor(resize_handle, 2.0))
     resize_handle.end_drag()
     scale_after_first = window.session.doc.get("shed").transform.scale
+    assert scale_after_first != 1.0  # sanity: the first drag actually did something
 
-    resize_handle.setPos(_pos_at_distance_factor(resize_handle, 0.5))
+    # start of the second gesture: the handle must re-read the committed
+    # result of the first gesture as ITS baseline, not the value it was
+    # constructed with (1.0)
+    resize_handle.setPos(resize_handle.pos() + QPointF(0.01, 0))  # nudge to trigger a fresh itemChange
+    assert resize_handle._start_scale == pytest.approx(scale_after_first)
     resize_handle.end_drag()
-    scale_after_second = window.session.doc.get("shed").transform.scale
-
-    assert scale_after_second == pytest.approx(scale_after_first * 0.5, rel=0.05)
 
 
 def test_rebuild_while_handles_are_active_does_not_crash(qtbot):

@@ -175,19 +175,42 @@ class SelectionHandle(QGraphicsEllipseItem):
     representation — already correct — until some *other* action
     triggers the next rebuild, which then regenerates the authoritative
     path from the committed value. `EditableItem`'s own move-drag follows
-    the same "commit, don't rebuild" precedent already."""
+    the same "commit, don't rebuild" precedent already.
+
+    Resize sensitivity is deliberately *not* a ratio of raw scene-space
+    distances (`new_distance / starting_distance`) — a real bug found by
+    actually using it: dragging a thin, wide object like a deck panel
+    sideways could blow its scale up hugely, and the same drag felt far
+    more sensitive when the view was zoomed out. Two compounding causes:
+    Qt hands `itemChange` mouse positions already converted to scene
+    coordinates, so the same physical drag corresponds to a *larger*
+    scene-space distance the further the view is zoomed out; and a ratio
+    divides by `starting_distance`, which is small for small/thin
+    objects, amplifying the same absolute drag into a huge factor. Using
+    an additive, zoom-normalized delta with a hard per-gesture clamp
+    (`_MAX_GESTURE_FACTOR`) fixes both: the same physical drag produces
+    the same scale change regardless of the object's size or the current
+    zoom, and no single gesture can blow the scale past a fixed multiple
+    no matter how far or fast the mouse moves. Rotation doesn't have this
+    problem — an angle from the centroid is scale-invariant under uniform
+    zoom, since zoom scales both dx and dy equally — so it keeps its
+    original angle-delta approach."""
 
     RADIUS = 0.3
+    RESIZE_SENSITIVITY = 0.01  # scale change per zoom-normalized scene unit dragged
+    MAX_GESTURE_FACTOR = 4.0  # a single gesture can at most 4x or quarter the scale
 
     def __init__(
         self,
         kind: str,  # "resize" | "rotate"
         target: EditableItem,
+        view: "SceneGraphicsView",
         on_drag_end: Callable[[float], None] | None,
     ):
         super().__init__(-self.RADIUS, -self.RADIUS, self.RADIUS * 2, self.RADIUS * 2)
         self.kind = kind
         self.target = target
+        self.view = view
         self._on_drag_end = on_drag_end
         color = QColor(30, 120, 220) if kind == "resize" else QColor(220, 140, 20)
         self.setBrush(QBrush(color))
@@ -198,7 +221,7 @@ class SelectionHandle(QGraphicsEllipseItem):
         self.setToolTip("Drag to resize" if kind == "resize" else "Drag to rotate")
         self._dragging = False
         self._center = target.path().boundingRect().center()
-        self._start_distance = 1.0
+        self._start_pos = None
         self._start_angle = 0.0
         self._start_scale = 1.0
         self._start_rotation = 0.0
@@ -210,6 +233,11 @@ class SelectionHandle(QGraphicsEllipseItem):
     def _angle(self, pos) -> float:
         return math.degrees(math.atan2(pos.y() - self._center.y(), pos.x() - self._center.x()))
 
+    def _zoom(self) -> float:
+        """The view's current horizontal scale factor (its wheelEvent
+        always scales x/y together, so this alone represents zoom)."""
+        return self.view.transform().m11() or 1.0
+
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange and self.scene() is not None:
             if not self._dragging:
@@ -220,12 +248,18 @@ class SelectionHandle(QGraphicsEllipseItem):
                 self._dragging = True
                 self._start_scale = self.target.scene_object.transform.scale
                 self._start_rotation = self.target.scene_object.transform.rotation
-                self._start_distance = max(self._distance(self.pos()), 1e-6)
+                self._start_pos = self.pos()
                 self._start_angle = self._angle(self.pos())
             self.target.setTransformOriginPoint(self._center)
             if self.kind == "resize":
-                factor = self._distance(value) / self._start_distance
-                self._final_value = max(0.01, self._start_scale * factor)
+                scene_delta = self._distance(value) - self._distance(self._start_pos)
+                screen_equivalent_delta = scene_delta * self._zoom()
+                raw_scale = self._start_scale + screen_equivalent_delta * self.RESIZE_SENSITIVITY
+                clamped = min(
+                    max(raw_scale, self._start_scale / self.MAX_GESTURE_FACTOR),
+                    self._start_scale * self.MAX_GESTURE_FACTOR,
+                )
+                self._final_value = max(0.01, clamped)
                 self.target.setScale(self._final_value / self._start_scale)
             else:
                 delta_angle = self._angle(value) - self._start_angle
@@ -881,9 +915,9 @@ class EditorWindow(QMainWindow):
             return
 
         rect = target.path().boundingRect()
-        resize_handle = SelectionHandle("resize", target, self._on_handle_resized)
+        resize_handle = SelectionHandle("resize", target, self._view, self._on_handle_resized)
         resize_handle.setPos(rect.topRight())
-        rotate_handle = SelectionHandle("rotate", target, self._on_handle_rotated)
+        rotate_handle = SelectionHandle("rotate", target, self._view, self._on_handle_rotated)
         margin = max(rect.height() * 0.15, 0.5)
         rotate_handle.setPos(rect.center().x(), rect.top() - margin)
 
