@@ -1,6 +1,6 @@
 # Landscape Rendering Tool — Task List
 
-**Status:** M0, M1, and M2 complete — M3 geometry engine is the next work (M1's remaining item, converting `objects.json` into a real scene YAML, is a good first M3 exercise since M2's schema now exists)
+**Status:** M0–M3 complete — M3b rule checker (or M1's leftover objects.json-to-YAML conversion) is the next work
 **Last updated:** 2026-09-21
 
 ## Decisions locked in
@@ -123,16 +123,22 @@ Driven by what the real scene actually contains — see `extraction/objects.md`.
 - [x] Schema validation with clear, line-numbered error messages — `SchemaError` carries a `path` and 1-based `line` (via `ruamel.yaml`'s line/col tracking); verified against a real malformed YAML file, not just dict fixtures
 - [x] Hand-authored example scene exercising every primitive (doubles as a test fixture) — `scenes/example.yaml`; also proves byte-identical round-trip through `load_raw`/`dump_raw`
 
-## M3 — Geometry engine
+## M3 — Geometry engine  *(complete)*
 
-- [ ] Scene script to in-memory object graph
-- [ ] Resolve each primitive to a shapely geometry (the "resolved scene")
-- [ ] `wavy_path` generator: spline through control points, noise-modulated normal offset, `waviness` 0 to 1 mapped to amplitude; deterministic per `seed`
-- [ ] Offsetting/buffering for paths and fence lines
-- [ ] Boolean ops, overlap resolution, and z-order compositing rules
-- [ ] Transform stack (translate/rotate/scale on objects and groups)
-- [ ] Bounding-box computation, auto-fit and explicit crop windows
-- [ ] Determinism check — same scene + seed renders identically every time
+Implemented in `src/landscape/geometry.py` (`resolve_scene`, `ResolvedScene`,
+`ResolvedObject`). Walks `SceneDocument.resolution_order` (from M2) so every
+relation/boolean target is already resolved by the time it's needed. Covered
+by `tests/test_geometry.py` (33 tests) against both small fixtures and the
+full `scenes/example.yaml`.
+
+- [x] Scene script to in-memory object graph — `SceneDocument` (M2) + `resolve_scene`'s dependency-ordered walk over it
+- [x] Resolve each primitive to a shapely geometry (the "resolved scene") — `primitive_to_geometry`; circles/ellipses are polygon-approximated at 32 segments/quadrant (bumped up from shapely's default 8, needed for M3b clearance rules to reproduce real-plan distances like `deck_s`'s 5.915 ft to within a hundredth of a foot)
+- [x] `wavy_path` generator: spline through control points, noise-modulated normal offset, `waviness` 0 to 1 mapped to amplitude; deterministic per `seed` — `_wavy_path_geometry`: `scipy.interpolate.splprep`/`splev` for the spline, per-sample local normal, `opensimplex.OpenSimplex(seed=...)` (an instance, not the mutating global `opensimplex.seed()`) for the offset
+- [x] Offsetting/buffering for paths and fence lines — `walkway`/`fence_line` resolve via `LineString(...).buffer(width/2, cap_style="flat")`
+- [x] Boolean ops, overlap resolution, and z-order compositing rules — `_apply_boolean` executes the `union`/`difference`/`intersection` declared in M2's schema; `ResolvedScene.paint_order()` gives the z-then-id painter's-algorithm order M5 will draw in. Overlap *detection* (as opposed to compositing order) is M3b's job, not this one.
+- [x] Transform stack (translate/rotate/scale on objects and groups) — `_apply_transform`: scale then rotate (both about centroid) then translate, applied after any relation. No `group` object type exists yet, so "on groups" doesn't apply — nothing in M2's schema defines a group.
+- [x] Bounding-box computation, auto-fit and explicit crop windows — `ResolvedScene.bounds()` and `.crop(x, y, width, height)` (clips every object to the window via `shapely` intersection, drops objects that fall entirely outside)
+- [x] Determinism check — same scene + seed renders identically every time — `test_resolve_scene_is_deterministic` and `test_wavy_path_is_deterministic_per_seed` compare geometry with `equals_exact(..., tolerance=0)`
 
 ## M3b — Rule checker (DRC)
 
