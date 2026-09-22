@@ -66,6 +66,7 @@ class EditorSession:
         self.violations: list[Violation] = []
         self._undo_stack: list[tuple[SceneDocument, Any]] = []
         self._redo_stack: list[tuple[SceneDocument, Any]] = []
+        self.dirty: bool = False  # True once anything has been edited since load()/save()
 
     def load(self, scene_path: str | Path) -> None:
         self.scene_path = Path(scene_path)
@@ -74,6 +75,7 @@ class EditorSession:
         self.doc = parse_scene(self.raw)
         self._undo_stack = []
         self._redo_stack = []
+        self.dirty = False
         self.recompute()
 
     def push_undo(self) -> None:
@@ -87,6 +89,7 @@ class EditorSession:
         if len(self._undo_stack) > _MAX_UNDO_DEPTH:
             self._undo_stack.pop(0)
         self._redo_stack = []
+        self.dirty = True
 
     @property
     def can_undo(self) -> bool:
@@ -238,6 +241,7 @@ class EditorSession:
     def save(self, path: str | Path | None = None) -> None:
         dump_raw(self.raw, path or self.scene_path)
         self._discard_autosave()
+        self.dirty = False
 
     @property
     def autosave_path(self) -> Path | None:

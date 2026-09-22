@@ -1,18 +1,21 @@
-"""Graphical editor (M8) — still an early slice, not the whole milestone.
+"""Graphical editor (M8) — every checklist item in TODO.md has landed here
+in some real form; see that checklist for exactly what "landed" means for
+each one (a few are honestly partial, e.g. resize/rotate handles only do
+uniform scale/absolute rotation, not the whole design space M2 supports).
 
-Landed so far: load a scene, show the same flat-mode picture `render_flat`
-produces, pan/zoom, select an object, drag it to move it, use the
-properties panel to change its rotation/scale/material, save (Ctrl+S or
-File > Save/Save As) back to disk losslessly, and — if a rules file is
-given — live rule-checker feedback: a marker at each violation's location
-plus a dashed highlight on every object it names, both carrying the
-violation's message as a tooltip, recomputed on every edit (this also
-closes M3b's last open item), Ctrl+Z/Ctrl+Shift+Z undo/redo (one snapshot
-per drag *gesture*, not per pixel — see `EditableItem`), autosave to a
-`.autosave` sidecar after every edit, layer visibility toggling, and
-File > Export… straight to PNG/SVG/PDF. There's still no create-object
-and no relation editing — see the M8 checklist in TODO.md for the real
-state.
+Landed: load a scene, show the same flat-mode picture `render_flat`
+produces, pan/zoom, select/move/resize/rotate an object (drag directly on
+the canvas via `EditableItem`/`SelectionHandle`, or the properties panel's
+numeric fields), reassign its material by swatch, edit its relation
+(center_of/mirror_of/relative_to/chord_of) via one generic control cluster,
+create new objects from a palette of M2 primitives, save (Ctrl+S or
+File > Save/Save As) back to disk losslessly, Ctrl+Z/Ctrl+Shift+Z undo/redo
+(one snapshot per gesture, not per pixel), autosave to a `.autosave`
+sidecar after every edit, layer visibility toggling, watch-and-reload for
+external changes (auto-reload if nothing's unsaved, ask first if there
+is), live rule-checker feedback (a marker + dashed highlight per violation,
+closing M3b's last open item too), and File > Export… straight to
+PNG/SVG/PDF.
 
 Uses PySide6 (`QGraphicsScene`/`QGraphicsView`), per the UI-stack decision
 recorded in TODO.md.
@@ -30,7 +33,7 @@ import math
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QFileSystemWatcher, Qt
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QWheelEvent
 from PySide6.QtWidgets import (
     QComboBox,
@@ -618,6 +621,9 @@ class EditorWindow(QMainWindow):
         self._selected_id: str | None = None
         self._hidden_layers: set[str] = set()
         self._selection_handles: list[SelectionHandle] = []
+        self._last_known_mtime_ns: int | None = None
+        self._file_watcher = QFileSystemWatcher()
+        self._file_watcher.fileChanged.connect(self._on_file_changed_externally)
         self._layers_menu = None
 
         self._view = SceneGraphicsView()
@@ -734,9 +740,59 @@ class EditorWindow(QMainWindow):
         self._rebuild_scene()
         self._view.fitInView(self._view.scene().itemsBoundingRect(), Qt.KeepAspectRatio)
         self.setWindowTitle(f"Landscape Editor — {Path(scene_path).name}")
+        self._watch_scene_file()
 
     def save_scene(self, path: str | Path | None = None) -> None:
         self.session.save(path)
+        self._remember_own_write()
+
+    def _watch_scene_file(self) -> None:
+        """(Re)point the file watcher at the just-loaded scene, and
+        record its mtime so a later `fileChanged` signal caused by our
+        *own* save/autosave can be told apart from a genuine external
+        edit — see `_on_file_changed_externally`."""
+        watched = self._file_watcher.files()
+        if watched:
+            self._file_watcher.removePaths(watched)
+        self._file_watcher.addPath(str(self.session.scene_path))
+        self._remember_own_write()
+
+    def _remember_own_write(self) -> None:
+        path = self.session.scene_path
+        if path and path.exists():
+            self._last_known_mtime_ns = path.stat().st_mtime_ns
+
+    def _on_file_changed_externally(self, path: str) -> None:
+        changed = Path(path)
+        # Some editors/tools save via temp-file-plus-rename, which drops
+        # the underlying OS watch after the first change; re-add so the
+        # same logical file keeps being watched.
+        if changed.exists() and path not in self._file_watcher.files():
+            self._file_watcher.addPath(path)
+        if not changed.exists():
+            return  # e.g. a temp-file-plus-rename's intermediate delete
+
+        if changed.stat().st_mtime_ns == self._last_known_mtime_ns:
+            return  # this change was our own save()/autosave(), already accounted for
+
+        if not self.session.dirty:
+            self.load_scene(changed, show_annotations=self._show_annotations)
+            self.statusBar().showMessage(f"Reloaded {changed.name} (changed on disk)")
+            return
+
+        from PySide6.QtWidgets import QMessageBox
+
+        choice = QMessageBox.question(
+            self,
+            "File changed on disk",
+            f"'{changed.name}' was changed outside the editor, and you have unsaved edits.\n\n"
+            "Reload it and discard your changes?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if choice == QMessageBox.Yes:
+            self.load_scene(changed, show_annotations=self._show_annotations)
+            self.statusBar().showMessage(f"Reloaded {changed.name} (changed on disk)")
 
     def _rebuild_scene(self) -> None:
         """Qt-side rebuild: ask the session to recompute geometry and

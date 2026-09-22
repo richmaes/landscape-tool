@@ -556,6 +556,126 @@ def test_handles_positioned_at_target_bounding_box(qtbot):
     assert rotate_handle.pos().y() < rect.top()  # above the object, not on it
 
 
+# --- watch-and-reload -------------------------------------------------
+
+
+def _stop_watching(qtbot, window: EditorWindow) -> None:
+    """A real finding, not a hypothetical: the OS-level QFileSystemWatcher
+    delivers its signal asynchronously, and it can arrive *after* a test
+    function returns — once `monkeypatch` has already restored the real
+    QMessageBox.question, so a late-delivered signal calls the actual
+    modal dialog with no display to show it on, aborting the process.
+    Draining pending events while this test's monkeypatch is still active,
+    then stopping the watch outright, keeps that signal from ever
+    escaping into a later test."""
+    qtbot.wait(50)
+    window._file_watcher.removePaths(window._file_watcher.files())
+
+
+def test_load_scene_watches_the_file(qtbot, tmp_path):
+    scene_copy = tmp_path / "copy.yaml"
+    scene_copy.write_text(EXAMPLE_SCENE.read_text())
+    window = EditorWindow(materials_path=DEFAULT_MATERIALS)
+    qtbot.addWidget(window)
+
+    window.load_scene(scene_copy, show_annotations=True)
+
+    assert window._file_watcher.files() == [str(scene_copy)]
+    assert window._last_known_mtime_ns == scene_copy.stat().st_mtime_ns
+
+
+def test_loading_a_second_scene_stops_watching_the_first(qtbot, tmp_path):
+    first = tmp_path / "first.yaml"
+    first.write_text(EXAMPLE_SCENE.read_text())
+    second = tmp_path / "second.yaml"
+    second.write_text(EXAMPLE_SCENE.read_text())
+    window = EditorWindow(materials_path=DEFAULT_MATERIALS)
+    qtbot.addWidget(window)
+    window.load_scene(first, show_annotations=True)
+
+    window.load_scene(second, show_annotations=True)
+
+    assert window._file_watcher.files() == [str(second)]
+
+
+def test_own_save_does_not_trigger_a_reload_or_dialog(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    scene_copy = tmp_path / "copy.yaml"
+    scene_copy.write_text(EXAMPLE_SCENE.read_text())
+    window = EditorWindow(materials_path=DEFAULT_MATERIALS)
+    qtbot.addWidget(window)
+    window.load_scene(scene_copy, show_annotations=True)
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a))
+
+    window.save_scene()
+    window._on_file_changed_externally(str(scene_copy))
+
+    assert asked == []
+    _stop_watching(qtbot, window)
+
+
+def test_external_change_with_no_unsaved_edits_auto_reloads(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    scene_copy = tmp_path / "copy.yaml"
+    scene_copy.write_text(EXAMPLE_SCENE.read_text())
+    window = EditorWindow(materials_path=DEFAULT_MATERIALS)
+    qtbot.addWidget(window)
+    window.load_scene(scene_copy, show_annotations=True)
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a))
+
+    scene_copy.write_text(EXAMPLE_SCENE.read_text() + "\n# appended externally\n")
+    window._on_file_changed_externally(str(scene_copy))
+
+    assert asked == []
+    assert "Reloaded" in window.statusBar().currentMessage()
+    _stop_watching(qtbot, window)
+
+
+def test_external_change_with_unsaved_edits_asks_before_reloading(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    scene_copy = tmp_path / "copy.yaml"
+    scene_copy.write_text(EXAMPLE_SCENE.read_text())
+    window = EditorWindow(materials_path=DEFAULT_MATERIALS)
+    qtbot.addWidget(window)
+    window.load_scene(scene_copy, show_annotations=True)
+    _select_only(window, "shed")
+    window._panel.rotation_spin.setValue(77)  # an unsaved edit
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
+
+    scene_copy.write_text(EXAMPLE_SCENE.read_text() + "\n# appended externally\n")
+    window._on_file_changed_externally(str(scene_copy))
+
+    # chose "No": the edit survives, nothing got reloaded
+    assert window.session.doc.get("shed").transform.rotation == 77
+    _stop_watching(qtbot, window)
+
+
+def test_choosing_yes_reloads_and_discards_the_edit(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    scene_copy = tmp_path / "copy.yaml"
+    scene_copy.write_text(EXAMPLE_SCENE.read_text())
+    window = EditorWindow(materials_path=DEFAULT_MATERIALS)
+    qtbot.addWidget(window)
+    window.load_scene(scene_copy, show_annotations=True)
+    _select_only(window, "shed")
+    original_rotation = window.session.doc.get("shed").transform.rotation
+    window._panel.rotation_spin.setValue(77)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+
+    scene_copy.write_text(EXAMPLE_SCENE.read_text() + "\n# appended externally\n")
+    window._on_file_changed_externally(str(scene_copy))
+
+    assert window.session.doc.get("shed").transform.rotation == original_rotation
+    assert not window.session.dirty
+    _stop_watching(qtbot, window)
+
+
 def test_save_unchanged_scene_is_byte_identical(qtbot, tmp_path):
     window = _open_editor(qtbot)
     out = tmp_path / "roundtrip.yaml"

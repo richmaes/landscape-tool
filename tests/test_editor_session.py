@@ -194,6 +194,47 @@ def test_no_undo_or_redo_immediately_after_load():
     assert not session.can_redo
 
 
+# --- dirty flag (watch-and-reload's basis for warn-vs-auto-reload) ------
+
+
+def test_not_dirty_immediately_after_load():
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    assert not session.dirty
+
+
+def test_dirty_after_an_edit():
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    session.set_rotation("shed", 45)
+    assert session.dirty
+
+
+def test_not_dirty_after_save(tmp_path):
+    scene_copy = tmp_path / "copy.yaml"
+    scene_copy.write_text(EXAMPLE_SCENE.read_text())
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(scene_copy)
+    session.set_rotation("shed", 45)
+    assert session.dirty
+
+    session.save()
+
+    assert not session.dirty
+
+
+def test_still_dirty_after_undo_to_original_state():
+    """Conservative by design: once anything has been edited, dirty stays
+    True until an explicit save, even if undo happens to land back on
+    the original values — matching this project's warn-don't-silently-
+    discard stance rather than trying to detect true equivalence."""
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    session.set_rotation("shed", 45)
+    session.undo()
+    assert session.dirty
+
+
 def test_undo_reverts_a_set_rotation():
     session = EditorSession(DEFAULT_MATERIALS)
     session.load(_scene_copy(EXAMPLE_SCENE))
