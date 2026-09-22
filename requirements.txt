@@ -13,8 +13,12 @@ pycairo==1.29.1
 pycparser==3.0
 Pygments==2.21.0
 pypdfium2==5.13.0
+PySide6==6.11.2
+PySide6_Addons==6.11.2
+PySide6_Essentials==6.11.2
 pytest==9.1.1
 ruamel.yaml==0.19.1
 scipy==1.18.1
 shapely==2.1.2
+shiboken6==6.11.2
 svgwrite==1.4.3

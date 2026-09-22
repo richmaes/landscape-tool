@@ -1,6 +1,6 @@
 # Landscape Rendering Tool — Task List
 
-**Status:** M0–M5 and M3b complete — per the suggested order of attack below, M8 (editor) is next, but it's blocked on the open "UI stack" question; M7 export has no such blocker and is next-next in that same ordering, so it's a reasonable thing to do while that question is open
+**Status:** M0–M5 and M3b complete; M8 started (UI stack decided: PySide6; first editor slice — load a scene, pan/zoom, same picture as the flat renderer — landed). Rest of M8 (select/move/resize/rotate, live rule-checker feedback, undo/redo, round-trip save, export-from-editor) and M7 export are the open work.
 **Last updated:** 2026-09-21
 
 ## Decisions locked in
@@ -46,7 +46,7 @@ definitions, and a rule checker instead — see M2 and M3b.
 - [x] ~~Scene script format~~ — resolved: YAML. See above.
 - [x] ~~Is the PDF vector or scanned?~~ — vector, Illustrator 30.6, extracted.
 - [x] ~~Units and coordinate origin~~ — feet, +x east / +y north, origin bottom-left, 36 pt = 1 ft.
-- [ ] **UI stack for the editor** — Tk/Qt desktop vs. a browser front end over the Python core. A browser UI is usually far more approachable for a non-technical daily user. Decide before M8.
+- [x] ~~UI stack for the editor~~ — resolved 2026-09-21: desktop, using **PySide6** (Qt for Python; LGPL, free for commercial use, unlike PyQt6's GPL/commercial dual license). `QGraphicsView`/`QGraphicsScene` gives interactive selection/move/resize/rotate largely for free, which Tkinter's plain `Canvas` doesn't.
 - [ ] **Target print size / DPI** for the art mode (drives texture resolution budget).
 - [ ] **Elevation / 3D** — assumed out of scope; 2D plan view only. Confirm.
 - [ ] **Full site extent** — the source PDF is a 24 x 24 ft crop; the real yard is significantly larger.
@@ -214,11 +214,22 @@ this file's own example — now actually works, wired up in
 - [ ] Embed raster fills in vector output for art mode (document the hybrid honestly)
 - [ ] Batch export — multiple modes/variants from one scene in a single run
 
-## M8 — Graphical editor  *(promoted: this is the primary interface)*
+## M8 — Graphical editor  *(promoted: this is the primary interface; first slice landed, most of the milestone still ahead)*
 
-- [ ] Decide the UI stack (see open questions)
-- [ ] Fast low-resolution preview render for interactive iteration
-- [ ] Pan/zoom; toggle layers and render modes
+M8 is a large milestone; the items below are genuinely still a checklist,
+not close to done as a whole. First slice landed in
+`src/landscape/editor.py` (`landscape edit scene.yaml`): a `QGraphicsScene`
+built object-by-object (each tagged with its scene id via `setData`, since
+later steps need to hit-test individual objects, not a flattened image),
+shown in a pannable/zoomable `QGraphicsView`. 9 tests in
+`tests/test_editor.py` (118 total), run headless via `QT_QPA_PLATFORM=
+offscreen` and checked visually with a rendered screenshot before writing
+them — same picture `render_flat` produces, confirmed independently rather
+than assumed.
+
+- [x] Decide the UI stack (see open questions) — PySide6, see the Open Questions entry above
+- [x] Fast low-resolution preview render for interactive iteration — `build_graphics_scene()`; not yet "low-resolution" in any deliberate sense, just whatever Qt draws directly, which has been fast enough so far
+- [ ] Pan/zoom; toggle layers and render modes — pan/zoom done (`SceneGraphicsView`, drag + wheel); layer/mode toggling not started (there's only one render mode, flat, to toggle to yet)
 - [ ] Select, move, resize and rotate objects directly
 - [ ] Create objects from a palette of the M2 primitives
 - [ ] Material assignment by visual swatch

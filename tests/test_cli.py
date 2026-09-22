@@ -24,6 +24,15 @@ def test_render_parses_expected_args():
     assert args.out == "out/plan.png"
 
 
+def test_edit_parses_expected_args():
+    parser = build_parser()
+    args = parser.parse_args(["edit", "scene.yaml", "--materials", "custom.yaml", "--show-annotations"])
+    assert args.command == "edit"
+    assert args.scene == "scene.yaml"
+    assert args.materials == "custom.yaml"
+    assert args.show_annotations is True
+
+
 def test_art_mode_not_yet_implemented(capsys):
     with pytest.raises(SystemExit) as exc_info:
         main(["render", str(EXAMPLE_SCENE), "--mode", "art", "--out", "out/plan.png"])

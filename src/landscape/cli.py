@@ -49,6 +49,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     render.add_argument("--dpi-scale", type=float, default=1.0, help="PNG-only resolution multiplier")
 
+    edit = subparsers.add_parser("edit", help="Open a scene in the graphical editor (M8)")
+    edit.add_argument("scene", help="Path to a scene YAML file")
+    edit.add_argument(
+        "--materials", default="assets/materials.yaml", help="Path to a material library YAML file"
+    )
+    edit.add_argument(
+        "--show-annotations", action="store_true", help="Show annotation objects (technical view)"
+    )
+
     return parser
 
 
@@ -78,6 +87,17 @@ def main(argv: list[str] | None = None) -> int:
         if renderer is render_scene_to_png:
             kwargs["dpi_scale"] = args.dpi_scale
         renderer(doc, scene, materials, out_path, **kwargs)
+
+    elif args.command == "edit":
+        from PySide6.QtWidgets import QApplication
+
+        from .editor import EditorWindow
+
+        app = QApplication.instance() or QApplication(sys.argv[:1])
+        window = EditorWindow(materials_path=args.materials)
+        window.load_scene(args.scene, show_annotations=args.show_annotations)
+        window.show()
+        return app.exec()
 
     return 0
 
