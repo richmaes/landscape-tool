@@ -1,0 +1,211 @@
+# The real backyard concept, converted from extraction/objects.json
+# (itself extracted from backyard concept.pdf) into the M2 scene schema.
+# This is the M1 task "Convert objects.json into the first real scene
+# YAML once M2 lands."
+#
+# Faithfully reproduces the actual extracted geometry AND its known,
+# still-unresolved design flaws (see extraction/objects.md "Geometric
+# findings") rather than a corrected version — rules/backyard.yaml is
+# built to flag exactly those flaws automatically, as a real test of the
+# M3b rule checker against real data, not a synthetic fixture.
+#
+# Materials left unassigned (rendering as the fallback color) are ones
+# extraction/objects.json's own "materials_identified" section marks
+# TBD/unknown, not omissions: firepit and both water features have no
+# chosen material or form yet.
+
+units: ft
+page_width: 24
+page_height: 24
+scale: 36
+layers: [ground, structures, annotation]
+palette: pastel_v1
+
+objects:
+  - id: existing_vinyl_fence
+    type: fence_line
+    points: [[0, 24], [24, 24]]
+    material: fence
+    layer: structures
+    z: 0
+
+  - id: site_circle
+    type: circle
+    cx: 12
+    cy: 12
+    r: 12
+    material: sand_tbd
+    layer: ground
+    z: 1
+
+  - id: hot_tub_pad
+    type: rect
+    x: 7.466
+    y: 12.0
+    width: 9.0
+    height: 9.0
+    material: concrete
+    layer: structures
+    z: 2
+
+  - id: hot_tub
+    type: rect
+    x: 8.466
+    y: 13.0
+    width: 7.0
+    height: 7.0
+    corner_r: 1.006
+    material: water
+    layer: structures
+    z: 3
+
+  - id: deck_nw_green
+    type: rect
+    x: 3.627
+    y: 18.448
+    width: 4.5
+    height: 1.5
+    material: deck
+    layer: structures
+    z: 4
+
+  - id: deck_ne_green
+    type: rect
+    x: 15.865
+    y: 18.441
+    width: 4.5
+    height: 1.5
+    material: deck
+    layer: structures
+    z: 5
+
+  - id: deck_nw_wood
+    type: rect
+    x: 3.628
+    y: 16.325
+    width: 4.5
+    height: 2.0
+    material: deck
+    layer: structures
+    z: 6
+
+  - id: deck_ne_wood
+    type: rect
+    x: 15.867
+    y: 16.296
+    width: 4.5
+    height: 2.0
+    material: deck
+    layer: structures
+    z: 7
+
+  - id: deck_nw_seam
+    type: line
+    x1: 3.705
+    y1: 17.322
+    x2: 8.031
+    y2: 17.322
+    layer: structures
+    z: 8
+
+  - id: deck_ne_seam
+    type: line
+    x1: 15.97
+    y1: 17.292
+    x2: 20.341
+    y2: 17.292
+    layer: structures
+    z: 9
+
+  - id: deck_e
+    type: rect
+    x: 15.868
+    y: 12.122
+    width: 1.106
+    height: 4.171
+    material: deck
+    layer: structures
+    z: 10
+
+  - id: deck_w
+    type: rect
+    x: 7.023
+    y: 12.15
+    width: 1.106
+    height: 4.171
+    material: deck
+    layer: structures
+    z: 11
+
+  - id: deck_s
+    type: rect
+    x: 7.027
+    y: 11.64
+    width: 9.944
+    height: 1.106
+    material: deck
+    layer: structures
+    z: 12
+
+  - id: fence_enclosure
+    type: rect
+    x: 4.991
+    y: 10.977
+    width: 14.0
+    height: 10.0
+    annotation: true
+    layer: annotation
+    z: 13
+
+  - id: water_feature_a
+    type: regular_polygon
+    cx: 19.654
+    cy: 8.355
+    sides: 6
+    size: 0.822
+    layer: structures
+    z: 14
+
+  - id: water_feature_b
+    type: regular_polygon
+    cx: 21.822
+    cy: 9.05
+    sides: 6
+    size: 0.822
+    layer: structures
+    z: 15
+
+  - id: back_fence
+    type: rect
+    x: 2.045
+    y: 21.092
+    width: 19.948
+    height: 0.646
+    material: fence
+    layer: structures
+    z: 16
+
+  - id: back_fence_seam
+    type: line
+    x1: 2.122
+    y1: 21.402
+    x2: 22.013
+    y2: 21.402
+    layer: structures
+    z: 17
+
+  - id: firepit_keepout
+    type: keepout
+    rule: no_burnable_material
+    shape: {type: circle, cx: 8.588, cy: 4.965, r: 6.0}
+    layer: annotation
+    z: 18
+
+  - id: firepit
+    type: ellipse
+    cx: 8.812
+    cy: 5.725
+    rx: 1.013
+    ry: 0.956
+    layer: structures
+    z: 19

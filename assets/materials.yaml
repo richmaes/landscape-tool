@@ -70,3 +70,14 @@ materials:
     color: "#7FA66B"
     texture: {style: scallop}
     edge: {weight: 1.0, color: null}
+
+  # Provisional, not a real starter material: matches the sand fill Rich
+  # used as a placeholder in backyard concept.pdf for site_circle, whose
+  # actual burnable ground material is still an open TODO.md item. Kept
+  # separate from the 11 starter materials above so it's obvious this one
+  # is a stand-in, not a finished decision.
+  sand_tbd:
+    name: Sand (placeholder)
+    color: "#E8DCC0"
+    texture: {style: none}
+    edge: {weight: 0.5, color: null}

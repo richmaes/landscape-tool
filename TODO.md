@@ -1,6 +1,6 @@
 # Landscape Rendering Tool — Task List
 
-**Status:** M0–M5 and M3b complete; M8 underway (PySide6 editor: load, pan/zoom, select, drag-move, panel-based rotate/scale/material edits, and lossless save-to-disk all work). Still open in M8: create-objects, swatch-based material picking, relation editing, live rule-checker overlay, undo/redo, watch-reload, export-from-editor. M7 export is untouched.
+**Status:** M0–M5, M1, and M3b complete; M8 underway (PySide6 editor: load, pan/zoom, select, drag-move, panel-based rotate/scale/material edits, and lossless save-to-disk all work). `scenes/backyard.yaml` is now the real design (converted from `extraction/objects.json`), not just the `scenes/example.yaml` schema fixture — see M1 for a real finding this surfaced (the documented `deck_intrudes_on_keepout` doesn't actually hold against the keepout as drawn). Still open in M8: create-objects, swatch-based material picking, relation editing, live rule-checker overlay, undo/redo, watch-reload, export-from-editor. M7 export is untouched.
 **Last updated:** 2026-09-21
 
 ## Decisions locked in
@@ -75,7 +75,7 @@ orientation, water feature form) are tracked in `extraction/objects.md` under
   - [x] `PyYAML` — not in the original list but required for the M2 scene format; added
 - [x] CLI entry point skeleton (`landscape render scene.yaml --mode flat --out out/plan.png`) — stub `render` command wired up via `pyproject.toml` `[project.scripts]`, exits 1 with "not yet implemented" until M2/M3 land; covered by `tests/test_cli.py`
 
-## M1 — PDF to scene script  *(largely complete)*
+## M1 — PDF to scene script  *(complete)*
 
 - [x] Ingest the source site-plan PDF; determine vector vs. raster — pure vector
 - [x] Extract vector paths with coordinates, colours and true paint order
@@ -83,8 +83,38 @@ orientation, water feature form) are tracked in `extraction/objects.md` under
 - [x] Classify extracted geometry into named objects with roles
 - [x] Emit `extraction/objects.json` + `extraction/objects.md` (20 objects)
 - [x] Capture the existing vinyl fence, which is absent from the PDF
-- [ ] Convert `objects.json` into the first real scene YAML once M2 lands
+- [x] Convert `objects.json` into the first real scene YAML once M2 lands — `scenes/backyard.yaml`, all 20 objects, faithfully reproducing the actual extracted geometry rather than a corrected version (see below)
 - [x] Extraction kept as a one-time bootstrap (`tools/extract_pdf.py`), not a runtime dependency
+
+**`scenes/backyard.yaml`** is the real design, not a fixture — unlike
+`scenes/example.yaml` (a hand-authored schema-coverage demo with arbitrary
+placement, never meant to resemble the PDF). `rules/backyard.yaml` mirrors
+the findings in `extraction/objects.md` "Geometric findings" as executable
+checks. Running it surfaced a genuinely new, more precise result, not
+just a re-confirmation:
+
+- The `firepit_keepout_concentric` (0.792 ft off-center) and
+  `firepit_keepout_contained_by_site` (overhangs by 7.819 ft
+  center-to-center) rules reproduce the documented findings exactly.
+- **`deck_intrudes_on_keepout` does not actually hold against the drawing
+  as-is.** `extraction/objects.json`'s "deck_s is 0.085 ft inside the
+  keep-out" measures distance from the *firepit's own center* — that's
+  what the clearance would be if the keepout gets recentered on the
+  firepit first (fixing the concentricity flaw). Measured against the
+  keepout circle's own drawn position, `deck_s` is actually a clear 0.675
+  ft away. Confirmed precisely with `shapely` (`tests/test_backyard_scene.py`),
+  not just re-asserted. Worth a decision: recenter the keepout (M2's
+  `center_of` relation would then keep it locked to the firepit going
+  forward) and re-check whether the 0.085 ft conflict is real once that's
+  done, or leave it as a known, intentionally-off-center placeholder.
+- A palette gap, found only by actually rendering it: the new
+  `sand_tbd` placeholder material (`#E8DCC0`, matching the PDF's sand
+  fill) and the existing `fence` material (`#E4DCC8`) sit at color
+  distance 0.124 — just over the 0.12 "too similar" threshold, so M4's
+  own palette checker doesn't catch it, but `back_fence` all but
+  disappears into `site_circle` in the actual render. The threshold is
+  probably too lenient; not fixed yet, just measured and locked into a
+  test so it doesn't drift unnoticed.
 
 ## M2 — Scene script schema  *(complete)*
 
@@ -153,8 +183,8 @@ integration run against `scenes/example.yaml` that checks exactly which
 rules fire and which stay silent.
 
 - [x] Rule engine over the resolved scene, emitting located, human-readable violations — `run_rules(scene, rules) -> list[Violation]`; `Violation.location` is a representative (x, y) point (the offending overlap's centroid where there is one) for the editor to anchor a warning to later
-- [x] Starter rules — implemented as the 5 check types above, plus real instances in `rules/default.yaml` wired against `scenes/example.yaml` (schema demo fixture, not the real backyard — see the note in that file). Once M1's leftover item lands (`objects.json` to real scene YAML), a parallel rules file should encode the real findings from `extraction/objects.md`:
-  - [x] No burnable material inside a keep-out zone (catches `deck_s`, currently 0.085 ft inside) — `keepout_material_exclusion`
+- [x] Starter rules — implemented as the 5 check types above, plus real instances in `rules/default.yaml` (against `scenes/example.yaml`, the schema demo fixture) **and** `rules/backyard.yaml` (against the real design, `scenes/backyard.yaml` — see M1 above for what actually fired, including one documented finding that turned out not to hold against the as-drawn geometry):
+  - [x] No burnable material inside a keep-out zone — `keepout_material_exclusion`; against the real backyard scene this catches `site_circle` not being carved out around the keepout, but *not* `deck_s` — see M1's note on why the "0.085 ft inside" finding doesn't hold against the keepout as actually drawn
   - [x] Keep-out zone must be concentric with its firepit — `concentricity`; checks the geometric invariant directly (centroid distance), not just that a `center_of` relation exists, so it still catches drift in a hand-edited scene
   - [x] Keep-out zone must be contained by its parent region — `containment`
   - [x] Objects must not overlap unless explicitly stacked — `no_overlap_unless_stacked`; needed an `ignore_materials`/`exceptions` design to keep ground-cover layers (lawn, mulch) and intentionally-abutting pairs (deck-on-pad) from drowning real findings in noise
