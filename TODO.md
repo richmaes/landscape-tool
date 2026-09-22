@@ -24,6 +24,23 @@ by a tool, which rules out a Python DSL however convenient its expressions
 would be. Derived geometry is handled by declarative relations, reusable
 definitions, and a rule checker instead — see M2 and M3b.
 
+## Working practices
+
+- Commit as work progresses — small, logical commits per milestone item
+  rather than one large commit at the end of a milestone.
+- Develop tests alongside each milestone's implementation, not deferred
+  entirely to M9. M9 is for the comprehensive/regression pass, but each
+  primitive, relation, or rule should get a quick check as it's built so
+  regressions surface immediately rather than at the end.
+- Update this file and the relevant decision/markdown docs (e.g.
+  `extraction/objects.md`) periodically as work happens, not only at the
+  end of a session — checkboxes, decision records, and open
+  questions/items should stay current with what has actually been
+  decided or built.
+- **10-minute rule:** no AI-driven operation may run longer than 10
+  minutes without pausing to notify the user that it is taking longer
+  than expected, and asking for approval or assistance before continuing.
+
 ## Open questions
 
 - [x] ~~Scene script format~~ — resolved: YAML. See above.
