@@ -359,9 +359,16 @@ Gaps found, most important first:
   the whole picture look right."
 - No cross-platform determinism test (see the M9 item below) — the
   existing determinism tests only re-run in the same process/machine.
-- Editor tests never simulate a real Qt mouse/key event (`wheelEvent`
-  zoom, space-bar pan) — every interaction test calls the underlying API
-  directly (`setPos()`, `setSelected()`).
+- ~~Editor tests never simulate a real Qt mouse/key event~~ — resolved
+  2026-09-22: `QTest.keyPress`/`keyRelease` (real focus/dispatch) for the
+  space-bar pan toggle, and a manually-built `QWheelEvent` sent via
+  `QApplication.sendEvent()` to the view's *viewport* (where Qt actually
+  delivers wheel events for a `QGraphicsView`, not the view itself) for
+  zoom. 5 new tests, stable across repeated runs. Everything else in the
+  editor still drives interaction the old way (`setPos()`/`setSelected()`
+  through `itemChange`) — deliberately: it's reliable and fast, and nothing
+  found so far needed the real dispatch path to catch a bug, unlike these
+  two, which had zero coverage of any kind before.
 - `relative_to`/`chord_of` aren't verified end-to-end with a numeric
   expected position the way `center_of`/`mirror_of` are; `directional_clearance`
   only exercises its "south" branch; `landscape edit`'s actual CLI
@@ -369,7 +376,7 @@ Gaps found, most important first:
 
 - [ ] Unit tests: primitive generation, `waviness` behavior at parameter extremes, boolean ops
 - [ ] Schema validation tests, including malformed scenes producing useful errors
-- [ ] Golden-image regression tests for both render modes
+- [ ] Golden-image regression tests for both render modes — deliberately deferred as of 2026-09-22: Rich wants to change what elements fundamentally look like in the editor view first, so baselining screenshots now would just mean re-baselining them right after. Pick this back up once that visual pass lands.
 - [ ] Round-trip check: scene to render, visually verified against the source PDF plan
 - [ ] Determinism test across runs and platforms
 - [ ] Revisit test coverage gaps (see audit note above)

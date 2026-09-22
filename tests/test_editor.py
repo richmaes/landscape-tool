@@ -6,8 +6,10 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # must be set before any Qt import
 
 import pytest
-from PySide6.QtCore import QPointF, Qt
-from PySide6.QtWidgets import QGraphicsPathItem, QGraphicsSimpleTextItem
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import QWheelEvent
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QGraphicsPathItem, QGraphicsSimpleTextItem, QGraphicsView
 from shapely.geometry import box
 
 from landscape.editor import EditableItem, EditorWindow, add_violation_overlays, build_graphics_scene
@@ -122,6 +124,79 @@ def test_editor_window_items_include_known_object_ids(qtbot):
     assert "firepit" in ids
     assert "firepit_keepout" in ids
     assert "clearance_marker" in ids
+
+
+# --- real Qt input events (wheel zoom, space-bar pan) ---------------------
+#
+# Every other interaction test in this file drives the same code a real
+# gesture would (setPos() through itemChange, direct method calls like
+# end_drag()) rather than a real mouse/keyboard event — reliable and fast,
+# but it never exercises Qt's actual event dispatch. These do: QTest.
+# keyPress/keyRelease route through the real focus/dispatch machinery, and
+# a manually-constructed QWheelEvent is sent via QApplication.sendEvent()
+# to the view's *viewport* widget — where Qt actually delivers wheel
+# events for a QGraphicsView — not called as a bare method on the view.
+
+
+def _wheel_event(delta_y: int) -> QWheelEvent:
+    return QWheelEvent(
+        QPointF(50, 50),
+        QPointF(50, 50),
+        QPoint(0, 0),
+        QPoint(0, delta_y),
+        Qt.NoButton,
+        Qt.NoModifier,
+        Qt.NoScrollPhase,
+        False,
+    )
+
+
+def test_real_wheel_event_scroll_up_zooms_in(qtbot):
+    window = _open_editor(qtbot)
+    before = window._view.transform().m11()
+
+    QApplication.sendEvent(window._view.viewport(), _wheel_event(120))
+
+    assert window._view.transform().m11() > before
+
+
+def test_real_wheel_event_scroll_down_zooms_out(qtbot):
+    window = _open_editor(qtbot)
+    before = window._view.transform().m11()
+
+    QApplication.sendEvent(window._view.viewport(), _wheel_event(-120))
+
+    assert window._view.transform().m11() < before
+
+
+def test_real_space_keypress_enables_pan_mode(qtbot):
+    window = _open_editor(qtbot)
+    window._view.setFocus()
+    assert window._view.dragMode() == QGraphicsView.NoDrag
+
+    QTest.keyPress(window._view, Qt.Key_Space)
+
+    assert window._view.dragMode() == QGraphicsView.ScrollHandDrag
+
+
+def test_real_space_keyrelease_restores_select_mode(qtbot):
+    window = _open_editor(qtbot)
+    window._view.setFocus()
+    QTest.keyPress(window._view, Qt.Key_Space)
+    assert window._view.dragMode() == QGraphicsView.ScrollHandDrag
+
+    QTest.keyRelease(window._view, Qt.Key_Space)
+
+    assert window._view.dragMode() == QGraphicsView.NoDrag
+
+
+def test_real_keypress_of_another_key_does_not_enable_pan_mode(qtbot):
+    window = _open_editor(qtbot)
+    window._view.setFocus()
+
+    QTest.keyPress(window._view, Qt.Key_A)
+
+    assert window._view.dragMode() == QGraphicsView.NoDrag
 
 
 def test_material_items_are_editable_when_doc_given(qtbot):
