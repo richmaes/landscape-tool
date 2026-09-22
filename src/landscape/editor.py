@@ -181,6 +181,7 @@ def build_graphics_scene(
     show_annotations: bool = False,
     doc: SceneDocument | None = None,
     on_object_moved: Callable[[str], None] | None = None,
+    hidden_layers: set[str] | None = None,
 ) -> QGraphicsScene:
     """The same picture `render_flat` draws, as interactive QGraphicsItems
     instead of a flattened cairo surface. Pass `doc` (the source
@@ -188,11 +189,17 @@ def build_graphics_scene(
     without it, this builds a read-only preview, same as before this
     became editable. `on_object_moved(object_id)` fires after a drag bakes
     itself into that object's transform, for anyone (the editor's
-    round-trip save) that needs to react to it."""
+    round-trip save) that needs to react to it. `hidden_layers` skips
+    objects on those layers entirely — "toggle layers" from M8's
+    checklist; toggling render *modes* is a separate, still-open item
+    since there's only flat mode to toggle to until M6 exists."""
     gscene = QGraphicsScene()
+    hidden_layers = hidden_layers or set()
 
     for obj in scene.paint_order():
         if obj.geometry.is_empty:
+            continue
+        if obj.layer in hidden_layers:
             continue
         if obj.annotation and not show_annotations:
             continue
@@ -357,6 +364,8 @@ class EditorWindow(QMainWindow):
         self.session = EditorSession(materials_path, rules_path)
         self._show_annotations = False
         self._selected_id: str | None = None
+        self._hidden_layers: set[str] = set()
+        self._layers_menu = None
 
         self._view = SceneGraphicsView()
         self._panel = PropertiesPanel(list(self.session.materials.materials))
@@ -395,6 +404,26 @@ class EditorWindow(QMainWindow):
         export_action = file_menu.addAction("&Export…")
         export_action.triggered.connect(self._on_export)
 
+        self._layers_menu = self.menuBar().addMenu("&Layers")
+
+    def _rebuild_layers_menu(self) -> None:
+        """(Re)builds the Layers menu from the loaded scene's layer list
+        — only known once a scene is loaded, so this can't happen in
+        `_build_menu` at construction time."""
+        self._layers_menu.clear()
+        for layer in self.session.doc.layers:
+            action = self._layers_menu.addAction(layer)
+            action.setCheckable(True)
+            action.setChecked(layer not in self._hidden_layers)
+            action.toggled.connect(lambda checked, layer=layer: self._on_layer_toggled(layer, checked))
+
+    def _on_layer_toggled(self, layer: str, visible: bool) -> None:
+        if visible:
+            self._hidden_layers.discard(layer)
+        else:
+            self._hidden_layers.add(layer)
+        self._rebuild_scene()
+
     def _on_export(self) -> None:
         from PySide6.QtWidgets import QFileDialog, QMessageBox
 
@@ -413,6 +442,8 @@ class EditorWindow(QMainWindow):
     def load_scene(self, scene_path: str | Path, show_annotations: bool = False) -> None:
         self.session.load(scene_path)
         self._show_annotations = show_annotations
+        self._hidden_layers = set()
+        self._rebuild_layers_menu()
         self._rebuild_scene()
         self._view.fitInView(self._view.scene().itemsBoundingRect(), Qt.KeepAspectRatio)
         self.setWindowTitle(f"Landscape Editor — {Path(scene_path).name}")
@@ -439,6 +470,7 @@ class EditorWindow(QMainWindow):
             self._show_annotations,
             doc=doc,
             on_object_moved=self.session.sync_object,
+            hidden_layers=self._hidden_layers,
         )
         if self.session.rules:
             add_violation_overlays(gscene, self.session.violations, doc.page_height)

@@ -315,7 +315,7 @@ reading the code:
 
 - [x] Decide the UI stack (see open questions) — PySide6, see the Open Questions entry above
 - [x] Fast low-resolution preview render for interactive iteration — `build_graphics_scene()`; not yet "low-resolution" in any deliberate sense, just whatever Qt draws directly, which has been fast enough so far
-- [ ] Pan/zoom; toggle layers and render modes — pan/zoom done (`SceneGraphicsView`, space-drag + wheel); layer/mode toggling not started (there's only one render mode, flat, to toggle to yet)
+- [~] Pan/zoom; toggle layers and render modes — pan/zoom (`SceneGraphicsView`, space-drag + wheel) and layer toggling (a "Layers" menu checkbox per `doc.layers` entry, `build_graphics_scene(..., hidden_layers=...)`) both done; render-*mode* toggling genuinely can't be finished until M6 exists — there's only flat mode to toggle to
 - [~] Select, move, resize and rotate objects directly — select and drag-move done (`EditableItem`); resize/rotate work but only via the properties panel's numeric fields, not a drag handle on the item itself
 - [ ] Create objects from a palette of the M2 primitives
 - [ ] Material assignment by visual swatch — the properties panel's material field is a name-only combo box; M4's `render_swatch()` exists but isn't wired in here yet

@@ -324,6 +324,43 @@ def test_export_action_shows_warning_on_bad_extension(qtbot, tmp_path, monkeypat
     assert not out.exists()
 
 
+def test_layers_menu_lists_scene_layers(qtbot):
+    window = _open_editor(qtbot)
+    assert [a.text() for a in window._layers_menu.actions()] == ["ground", "structures", "annotation"]
+    assert all(a.isChecked() for a in window._layers_menu.actions())
+
+
+def test_hiding_a_layer_removes_its_objects(qtbot):
+    window = _open_editor(qtbot)
+    before_ids = {i.data(0) for i in window._view.scene().items() if i.data(0)}
+    assert "shed" in before_ids  # 'shed' is on the 'structures' layer
+
+    window._on_layer_toggled("structures", False)
+
+    after_ids = {i.data(0) for i in window._view.scene().items() if i.data(0)}
+    assert "shed" not in after_ids
+    assert "site_circle" in after_ids  # 'ground' layer untouched
+
+
+def test_showing_a_hidden_layer_restores_its_objects(qtbot):
+    window = _open_editor(qtbot)
+    window._on_layer_toggled("structures", False)
+    window._on_layer_toggled("structures", True)
+
+    ids = {i.data(0) for i in window._view.scene().items() if i.data(0)}
+    assert "shed" in ids
+
+
+def test_hidden_layers_reset_on_new_load(qtbot):
+    window = _open_editor(qtbot)
+    window._on_layer_toggled("structures", False)
+    assert window._hidden_layers == {"structures"}
+
+    window.load_scene(EXAMPLE_SCENE, show_annotations=True)
+
+    assert window._hidden_layers == set()
+
+
 def test_add_violation_overlays_highlights_named_objects(qtbot):
     scene = ResolvedScene(objects=[_obj("a", box(0, 0, 2, 2), material="red")])
     gscene = build_graphics_scene(scene, _tiny_library(), page_height=10)
