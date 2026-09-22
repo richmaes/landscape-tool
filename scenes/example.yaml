@@ -1,0 +1,212 @@
+# Hand-authored example scene exercising every M2 primitive and relation.
+# Doubles as a test fixture for the schema/scene_io parser — not a real
+# design. See extraction/objects.md for the actual backyard concept.
+
+units: ft
+page_width: 40
+page_height: 40
+scale: 36          # points per foot, matching the extracted PDF
+layers: [ground, structures, annotation]
+palette: pastel_v1
+
+definitions:
+  paver:
+    type: rect
+    width: 1
+    height: 1
+    material: paver
+
+objects:
+  - id: site_circle
+    type: circle
+    cx: 20
+    cy: 20
+    r: 15
+    material: mulch
+    layer: ground
+    z: 1
+
+  - id: firepit
+    type: ellipse
+    cx: 12
+    cy: 8
+    rx: 1.0
+    ry: 0.95
+    material: stone
+    layer: structures
+    z: 10
+
+  - id: firepit_keepout
+    type: keepout
+    rule: no_burnable_material
+    shape: {type: circle, cx: 12, cy: 8, r: 6}
+    center_of: firepit
+    layer: annotation
+    z: 9
+
+  - id: hot_tub_pad
+    type: rect
+    x: 25
+    y: 25
+    width: 9
+    height: 9
+    material: concrete
+    layer: structures
+    z: 2
+
+  - id: hot_tub
+    type: rect
+    x: 26
+    y: 26
+    width: 7
+    height: 7
+    rotation: 0
+    corner_r: 1
+    material: composite
+    layer: structures
+    z: 3
+
+  - id: deck_west
+    type: rect
+    x: 24
+    y: 24
+    width: 1.1
+    height: 4.2
+    material: deck
+    layer: structures
+    z: 4
+
+  - id: deck_east
+    type: rect
+    x: 34
+    y: 24
+    width: 1.1
+    height: 4.2
+    material: deck
+    mirror_of: deck_west
+    about_x: 30
+    layer: structures
+    z: 4
+
+  - id: deck_south
+    type: rect
+    x: 25
+    y: 23
+    width: 9
+    height: 1.1
+    material: deck
+    relative_to: hot_tub_pad
+    dx: 0
+    dy: -2
+    layer: structures
+    z: 4
+
+  - id: property_line
+    type: polygon
+    points: [[0, 0], [40, 0], [40, 5], [0, 5]]
+    material: lawn
+    layer: ground
+    z: 0
+
+  - id: water_feature_a
+    type: regular_polygon
+    cx: 30
+    cy: 8
+    sides: 6
+    size: 1.6
+    rotation: 0
+    material: water
+    layer: structures
+    z: 5
+
+  - id: deck_seam
+    type: line
+    x1: 25
+    y1: 20
+    x2: 29
+    y2: 20
+    layer: structures
+    z: 6
+
+  - id: back_fence
+    type: fence_line
+    points: [[2, 35], [38, 35]]
+    post_spacing: 8
+    post_size: 0.33
+    rail_count: 2
+    height: 6
+    material: fence
+    layer: structures
+    z: 7
+
+  - id: new_fence
+    type: fence_line
+    chord_of: site_circle
+    offset: -2.26
+    angle_deg: 0
+    points: [[0, 0], [0, 0]]  # placeholder until M3 resolves chord_of geometry
+    post_spacing: 8
+    post_size: 0.33
+    rail_count: 2
+    height: 4
+    material: fence
+    layer: structures
+    z: 7
+
+  - id: bed_edge
+    type: wavy_path
+    points: [[1, 10], [5, 12], [9, 9], [13, 13]]
+    closed: false
+    waviness: 0.4
+    wavelength: 2.5
+    seed: 42
+    material: planting_bed
+    layer: ground
+    z: 1
+
+  - id: garden_walkway
+    type: walkway
+    points: [[5, 5], [10, 15], [15, 20]]
+    width: 3
+    material: gravel
+    layer: ground
+    z: 1
+
+  - id: lawn
+    type: rect
+    x: 15
+    y: 30
+    width: 10
+    height: 8
+    material: lawn
+    layer: ground
+    z: 1
+    boolean: {op: difference, targets: [bed_edge]}
+
+  - id: paver_sample
+    definition: paver
+    x: 0
+    y: 30
+    layer: ground
+    z: 1
+
+  - id: clearance_marker
+    type: rect
+    x: 22
+    y: 22
+    width: 14
+    height: 10
+    annotation: true
+    layer: annotation
+    z: 20
+
+  - id: shed
+    type: rect
+    x: 2
+    y: 2
+    width: 6
+    height: 4
+    material: deck
+    layer: structures
+    z: 8
+    transform: {tx: 0.5, ty: 0, rotation: 5, scale: 1.0}

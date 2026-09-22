@@ -1,6 +1,6 @@
 # Landscape Rendering Tool — Task List
 
-**Status:** M0 setup complete, M1 extraction complete — M2 scene schema is the next work
+**Status:** M0, M1, and M2 complete — M3 geometry engine is the next work (M1's remaining item, converting `objects.json` into a real scene YAML, is a good first M3 exercise since M2's schema now exists)
 **Last updated:** 2026-09-21
 
 ## Decisions locked in
@@ -86,35 +86,42 @@ orientation, water feature form) are tracked in `extraction/objects.md` under
 - [ ] Convert `objects.json` into the first real scene YAML once M2 lands
 - [x] Extraction kept as a one-time bootstrap (`tools/extract_pdf.py`), not a runtime dependency
 
-## M2 — Scene script schema
+## M2 — Scene script schema  *(complete)*
 
-- [ ] Define the top-level document: units, canvas/page size, scale, layer order, palette reference
-- [ ] Define the object model — every object has: `id`, `type`, `material`, `layer`/z-order, transform
-- [ ] Implement parametric primitives:
+Implemented in `src/landscape/schema.py` (dataclasses for the document,
+primitives, relations, booleans) and `src/landscape/scene_io.py`
+(`ruamel.yaml`-backed load/dump, validation, resolution ordering). Covered
+by `tests/test_schema.py` and `tests/test_scene_io.py` (33 tests), exercised
+against `scenes/example.yaml`, a hand-authored fixture hitting every
+primitive and relation.
+
+- [x] Define the top-level document: units, canvas/page size, scale, layer order, palette reference — `SceneDocument`
+- [x] Define the object model — every object has: `id`, `type`, `material`, `layer`/z-order, transform — `SceneObject` (+ `Transform` for the object-level translate/rotate/scale; a primitive's own fields, e.g. a rect's `rotation`, are its intrinsic shape, not this)
+- [x] Implement parametric primitives:
 Driven by what the real scene actually contains — see `extraction/objects.md`.
 
-  - [ ] `circle` — center, radius (site circle, firepit keep-out)
-  - [ ] `ellipse` — center, rx, ry (the firepit is 1.013 x 0.956, not a circle)
-  - [ ] `rect` — origin, width, height, rotation, optional `corner_r` (hot tub 7x7 r=1, pad, deck sections)
-  - [ ] `polygon` — explicit vertex list
-  - [ ] `regular_polygon` — center, sides, size, rotation (the hexagon water-feature placeholders)
-  - [ ] `line` — deck and fence seam details
-  - [ ] `fence_line` — polyline + post spacing, post size, rail count, height
-  - [ ] `wavy_path` — control points + `waviness` (amplitude), `wavelength`, `seed`; closed or open. Not used by the current scene; needed for the organic bed edges to come.
-  - [ ] `path` / `walkway` — centerline + width (offset to a polygon)
-  - [ ] `keepout` — a zone that carries a rule rather than a material (see M3b)
-- [ ] **Declarative relations** — a small closed vocabulary, NOT an expression language:
-  - [ ] `center_of: <id>` — keep-out circle centred on the firepit
-  - [ ] `mirror_of: <id>` + `about_x` — the left/right deck pairs
-  - [ ] `relative_to: <id>` + offset — deck sections positioned off the pad
-  - [ ] `chord_of: <id>` — the new fence's span across the sand circle
-  - [ ] Resolution order, and cycle detection with a readable error
-  - [ ] Every relation must map to a simple GUI control (a checkbox, a picker)
-- [ ] Reusable `definitions` + `instances` (define once, place many)
-- [ ] `annotation: true` objects (e.g. the 14 x 10 clearance marker) — excluded from material rendering, shown only in technical views
-- [ ] Boolean relationships — a bed carved out of lawn, a patio cut from decking
-- [ ] Schema validation with clear, line-numbered error messages
-- [ ] Hand-authored example scene exercising every primitive (doubles as a test fixture)
+  - [x] `circle` — center, radius (site circle, firepit keep-out)
+  - [x] `ellipse` — center, rx, ry (the firepit is 1.013 x 0.956, not a circle)
+  - [x] `rect` — origin, width, height, rotation, optional `corner_r` (hot tub 7x7 r=1, pad, deck sections)
+  - [x] `polygon` — explicit vertex list
+  - [x] `regular_polygon` — center, sides, size, rotation (the hexagon water-feature placeholders)
+  - [x] `line` — deck and fence seam details
+  - [x] `fence_line` — polyline + post spacing, post size, rail count, height
+  - [x] `wavy_path` — control points + `waviness` (amplitude), `wavelength`, `seed`; closed or open. Not used by the current scene; needed for the organic bed edges to come.
+  - [x] `path` / `walkway` — centerline + width (offset to a polygon happens in M3)
+  - [x] `keepout` — a zone that carries a rule rather than a material (see M3b); wraps its own shape primitive + a `rule` string
+- [x] **Declarative relations** — a small closed vocabulary, NOT an expression language. Flat sibling keys, e.g. `mirror_of: deck_west` + a sibling `about_x: 30`, so each one maps to one GUI control:
+  - [x] `center_of: <id>` — keep-out circle centred on the firepit
+  - [x] `mirror_of: <id>` + `about_x` — the left/right deck pairs
+  - [x] `relative_to: <id>` + offset — deck sections positioned off the pad
+  - [x] `chord_of: <id>` — the new fence's span across the sand circle
+  - [x] Resolution order, and cycle detection with a readable error — `scene_io.resolution_order()`, a topological sort over relation + boolean-op dependencies; stashed on `SceneDocument.resolution_order` for M3
+  - [x] Every relation maps to a simple GUI control (an id-picker plus at most two numeric siblings) — achieved by the flat-sibling-key design, not a nested payload
+- [x] Reusable `definitions` + `instances` (define once, place many) — `definition: <id>` on an object pulls its primitive/material from `definitions:`
+- [x] `annotation: true` objects (e.g. the 14 x 10 clearance marker) — excluded from material rendering, shown only in technical views
+- [x] Boolean relationships — a bed carved out of lawn, a patio cut from decking. Declared via `boolean: {op: union|difference|intersection, targets: [...]}` on an object; validated (unknown targets, cycles) same as relations. Executing the actual geometry op is M3's job, not M2's.
+- [x] Schema validation with clear, line-numbered error messages — `SchemaError` carries a `path` and 1-based `line` (via `ruamel.yaml`'s line/col tracking); verified against a real malformed YAML file, not just dict fixtures
+- [x] Hand-authored example scene exercising every primitive (doubles as a test fixture) — `scenes/example.yaml`; also proves byte-identical round-trip through `load_raw`/`dump_raw`
 
 ## M3 — Geometry engine
 

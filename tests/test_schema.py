@@ -1,0 +1,109 @@
+import pytest
+
+from landscape.schema import (
+    ChordOf,
+    CenterOf,
+    MirrorOf,
+    RelativeTo,
+    SchemaError,
+    parse_boolean,
+    parse_primitive,
+    parse_relation,
+    parse_transform,
+)
+
+
+def test_parse_circle():
+    prim = parse_primitive({"type": "circle", "cx": 1, "cy": 2, "r": 3})
+    assert prim.cx == 1 and prim.cy == 2 and prim.r == 3
+
+
+def test_parse_unknown_type_raises():
+    with pytest.raises(SchemaError, match="unknown primitive type"):
+        parse_primitive({"type": "triangle"})
+
+
+def test_parse_polygon_points_become_tuples():
+    prim = parse_primitive({"type": "polygon", "points": [[0, 0], [1, 0], [1, 1]]})
+    assert prim.points == [(0, 0), (1, 0), (1, 1)]
+
+
+def test_parse_keepout_wraps_shape():
+    prim = parse_primitive(
+        {"type": "keepout", "rule": "no_burnable", "shape": {"type": "circle", "cx": 0, "cy": 0, "r": 6}}
+    )
+    assert prim.rule == "no_burnable"
+    assert prim.shape.r == 6
+
+
+def test_wavy_path_rejects_out_of_range_waviness():
+    with pytest.raises(SchemaError, match="waviness"):
+        parse_primitive({"type": "wavy_path", "points": [], "waviness": 1.5})
+
+
+def test_parse_relation_center_of():
+    rel = parse_relation({"center_of": "firepit"})
+    assert rel == CenterOf(ref="firepit")
+
+
+def test_parse_relation_mirror_of_flat_siblings():
+    rel = parse_relation({"mirror_of": "deck_west", "about_x": 30})
+    assert rel == MirrorOf(ref="deck_west", about_x=30, about_y=None)
+
+
+def test_mirror_of_requires_exactly_one_axis():
+    with pytest.raises(SchemaError, match="exactly one"):
+        parse_relation({"mirror_of": "deck_west", "about_x": 30, "about_y": 5})
+    with pytest.raises(SchemaError, match="exactly one"):
+        parse_relation({"mirror_of": "deck_west"})
+
+
+def test_parse_relation_relative_to():
+    rel = parse_relation({"relative_to": "hot_tub_pad", "dx": 0, "dy": -2})
+    assert rel == RelativeTo(ref="hot_tub_pad", dx=0, dy=-2)
+
+
+def test_parse_relation_chord_of_requires_offset():
+    with pytest.raises(SchemaError, match="offset"):
+        parse_relation({"chord_of": "site_circle"})
+    rel = parse_relation({"chord_of": "site_circle", "offset": -2.26})
+    assert rel == ChordOf(ref="site_circle", offset=-2.26, angle_deg=0.0)
+
+
+def test_no_relation_present_returns_none():
+    assert parse_relation({"type": "circle"}) is None
+
+
+def test_multiple_relations_rejected():
+    with pytest.raises(SchemaError, match="more than one relation"):
+        parse_relation({"center_of": "a", "relative_to": "b"})
+
+
+def test_parse_boolean_difference():
+    op = parse_boolean({"op": "difference", "targets": ["bed_a", "bed_b"]})
+    assert op.op == "difference"
+    assert op.targets == ["bed_a", "bed_b"]
+
+
+def test_boolean_rejects_invalid_op():
+    with pytest.raises(SchemaError, match="boolean op must be one of"):
+        parse_boolean({"op": "xor", "targets": ["a"]})
+
+
+def test_boolean_requires_targets():
+    with pytest.raises(SchemaError, match="at least one target"):
+        parse_boolean({"op": "union", "targets": []})
+
+
+def test_parse_boolean_none_when_absent():
+    assert parse_boolean(None) is None
+
+
+def test_parse_transform_defaults_to_identity():
+    t = parse_transform(None)
+    assert (t.tx, t.ty, t.rotation, t.scale) == (0.0, 0.0, 0.0, 1.0)
+
+
+def test_parse_transform_rejects_unknown_field():
+    with pytest.raises(SchemaError, match="unknown transform field"):
+        parse_transform({"skew": 3})
