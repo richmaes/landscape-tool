@@ -87,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         if renderer is render_scene_to_png:
             kwargs["dpi_scale"] = args.dpi_scale
         renderer(doc, scene, materials, out_path, **kwargs)
+        print(f"landscape render: wrote {out_path}")
 
     elif args.command == "edit":
         from PySide6.QtWidgets import QApplication

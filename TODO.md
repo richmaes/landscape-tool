@@ -219,6 +219,13 @@ this file's own example — now actually works, wired up in
 - [x] Labels/callouts and an optional legend keyed to materials — annotations (`annotation: true`) and keepout zones (a `Keepout` primitive's `.rule`) get a dashed outline + text label instead of a fill (a real bug caught by actually looking at a render: keepout zones were being flat-filled with the "missing material" fallback color before this fix, since M2's own schema says a keepout "carries a rule rather than a material"); `--legend` draws a swatch+name list of materials actually used, via the independently-tested `used_materials_in_scene()`
 - [x] Vector-native output (clean SVG/PDF, no rasterization) — `render_scene_to_svg`/`render_scene_to_pdf` use `cairo.SVGSurface`/`PDFSurface` directly; `render_scene_to_png` (needed for on-screen preview and now wired into the CLI) is the one raster path, using the same `render_flat()` call over an `ImageSurface`
 
+**Real usability bug, found by Rich actually running the CLI himself, not
+by testing it in isolation:** `landscape render` printed nothing on
+success — same terminal output as doing nothing at all, so a real
+successful render looked indistinguishable from the command silently
+failing. Fixed by printing `landscape render: wrote <path>` on success;
+`tests/test_cli.py` now asserts that line appears.
+
 ## M6 — Renderer: hand-drawn pastel art mode
 
 - [ ] Research and prototype texture techniques before committing to an approach:

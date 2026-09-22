@@ -47,7 +47,7 @@ def test_unsupported_extension_rejected(capsys):
     assert "unsupported --out extension" in capsys.readouterr().err
 
 
-def test_render_flat_end_to_end_png(tmp_path):
+def test_render_flat_end_to_end_png(tmp_path, capsys):
     out = tmp_path / "plan.png"
     exit_code = main(
         [
@@ -67,6 +67,8 @@ def test_render_flat_end_to_end_png(tmp_path):
     assert out.exists()
     with Image.open(out) as img:
         assert img.size[0] > 0 and img.size[1] > 0
+    # a silent success looks indistinguishable from doing nothing at all
+    assert str(out) in capsys.readouterr().out
 
 
 def test_render_flat_end_to_end_svg(tmp_path):
