@@ -62,6 +62,31 @@ from .schema import SceneDocument, SceneObject, SchemaError
 
 _OBJECT_ID_ROLE = 0
 
+# Visual redesign, phase 1 (2026-09-22): the editing canvas only — flat
+# fills and lines, on request ("during editing, everything can just be
+# basic fills and lines"). The textured/watercolor hi-fi look is a
+# separate concern, M6's job, not this file's.
+BACKGROUND_COLOR = QColor("#F6F1E4")  # warm off-white paper, not stark white
+LINE_COLOR = QColor("#2B2A28")  # dark charcoal ("coal, like a pencil"), not flat black
+TEXT_COLOR = QColor("#2B2A28")  # same charcoal for any text drawn over the canvas
+LINE_WIDTH_PX = 3.0  # target on-screen stroke width for every shape, for now
+
+
+def _line_width_for_zoom(zoom: float) -> float:
+    """Scene-unit stroke width that renders at `LINE_WIDTH_PX` screen
+    pixels at the given view zoom factor — "figure out what 3px is
+    relative to total scale." Deliberately a plain (non-cosmetic) pen
+    width, not a Qt cosmetic pen fixed at a constant device-pixel size:
+    Rich asked for thickness that changes with magnification, i.e. one
+    that scales up/down along with everything else as the view zooms
+    (a cosmetic pen would instead stay a fixed 3px forever, regardless
+    of zoom — the opposite of what was asked for). Recalibrated back to
+    a true ~3px baseline on every scene rebuild (select, edit, undo,
+    layer toggle, ...); continues to scale proportionally with any plain
+    wheel-zoom in between, since that's just how a normal scene-space
+    pen width behaves under `QGraphicsView`'s zoom transform."""
+    return LINE_WIDTH_PX / (zoom or 1.0)
+
 
 def _path_for_geometry(geom: BaseGeometry, page_height: float) -> QPainterPath:
     """Same y-flip convention as `render_flat`: scene coordinates are
@@ -91,10 +116,6 @@ def _path_for_geometry(geom: BaseGeometry, page_height: float) -> QPainterPath:
                 path.lineTo(x, page_height - y)
 
     return path
-
-
-def _darken(color: QColor, factor: float = 0.7) -> QColor:
-    return QColor(int(color.red() * factor), int(color.green() * factor), int(color.blue() * factor))
 
 
 class EditableItem(QGraphicsPathItem):
@@ -304,11 +325,19 @@ def _add_material_item(
     obj: ResolvedObject,
     material: Material,
     page_height: float,
+    line_width: float = 0.2,
     scene_object: SceneObject | None = None,
     on_moved: Callable[[str], None] | None = None,
     on_drag_start: Callable[[], None] | None = None,
     on_drag_end: Callable[[], None] | None = None,
 ) -> QGraphicsPathItem:
+    """`line_width` (scene units) is deliberately the same fixed, dark
+    charcoal outline for every shape here, regardless of the material's
+    own `edge` weight/color — a temporary simplification for the "basic
+    fills and lines" editing look Rich asked for, not a permanent
+    replacement for material-specific edge styling. `render_flat` (the
+    real M5/M6 renderer, and what `EditorSession.export()` calls) is
+    untouched and still uses each material's actual edge weight/color."""
     path = _path_for_geometry(obj.geometry, page_height)
     if scene_object is not None:
         c = obj.geometry.centroid
@@ -320,31 +349,32 @@ def _add_material_item(
 
     fill = QColor(material.color)
     is_area = obj.geometry.geom_type in ("Polygon", "MultiPolygon")
-    weight = material.edge.get("weight", 1.0) or 0.0
-    edge = QColor(material.edge["color"]) if material.edge.get("color") else _darken(fill)
 
     item.setBrush(QBrush(fill) if is_area else QBrush(Qt.NoBrush))
-    item.setPen(QPen(edge, weight) if weight > 0 else QPen(Qt.NoPen))
+    item.setPen(QPen(LINE_COLOR, line_width))
     scene.addItem(item)
     return item
 
 
-def _add_annotation_item(scene: QGraphicsScene, obj: ResolvedObject, label: str, page_height: float) -> None:
+def _add_annotation_item(
+    scene: QGraphicsScene, obj: ResolvedObject, label: str, page_height: float, line_width: float = 0.2
+) -> None:
     """Annotations and keepout zones: dashed outline, no fill, a text
     label at the centroid — mirrors `render_flat._draw_annotation`. Not
     selectable/movable in this slice."""
     path = _path_for_geometry(obj.geometry, page_height)
     item = QGraphicsPathItem(path)
     item.setData(_OBJECT_ID_ROLE, obj.id)
-    pen = QPen(QColor(64, 64, 64))
+    pen = QPen(LINE_COLOR)
     pen.setStyle(Qt.DashLine)
-    pen.setWidthF(0.05)
+    pen.setWidthF(line_width)
     item.setPen(pen)
     item.setBrush(QBrush(Qt.NoBrush))
     scene.addItem(item)
 
     centroid = obj.geometry.centroid
     text = QGraphicsSimpleTextItem(label)
+    text.setBrush(QBrush(TEXT_COLOR))
     font = text.font()
     font.setPointSizeF(0.8)
     text.setFont(font)
@@ -362,6 +392,7 @@ def build_graphics_scene(
     hidden_layers: set[str] | None = None,
     on_drag_start: Callable[[], None] | None = None,
     on_drag_end: Callable[[], None] | None = None,
+    line_width: float = 0.2,
 ) -> QGraphicsScene:
     """The same picture `render_flat` draws, as interactive QGraphicsItems
     instead of a flattened cairo surface. Pass `doc` (the source
@@ -374,8 +405,13 @@ def build_graphics_scene(
     per drag, not per pixel — see `EditableItem`). `hidden_layers` skips
     objects on those layers entirely — "toggle layers" from M8's
     checklist; toggling render *modes* is a separate, still-open item
-    since there's only flat mode to toggle to until M6 exists."""
+    since there's only flat mode to toggle to until M6 exists.
+    `line_width` (scene units) is the uniform outline width for every
+    shape — see `_line_width_for_zoom`, which callers use to convert a
+    target screen-pixel width into this. Default here is just a sane
+    fallback for callers (mostly tests) that don't care about zoom."""
     gscene = QGraphicsScene()
+    gscene.setBackgroundBrush(QBrush(BACKGROUND_COLOR))
     hidden_layers = hidden_layers or set()
 
     for obj in scene.paint_order():
@@ -387,12 +423,12 @@ def build_graphics_scene(
             continue
         if obj.annotation or obj.rule:
             label = f"{obj.id} ({obj.rule})" if obj.rule else obj.id
-            _add_annotation_item(gscene, obj, label, page_height)
+            _add_annotation_item(gscene, obj, label, page_height, line_width)
             continue
         material = materials.resolve(obj.material)
         scene_object = doc.get(obj.id) if doc is not None else None
         _add_material_item(
-            gscene, obj, material, page_height, scene_object, on_object_moved, on_drag_start, on_drag_end
+            gscene, obj, material, page_height, line_width, scene_object, on_object_moved, on_drag_start, on_drag_end
         )
 
     return gscene
@@ -483,6 +519,10 @@ class SceneGraphicsView(QGraphicsView):
         self.setRenderHint(QPainter.Antialiasing)
         self.setDragMode(QGraphicsView.NoDrag)
         self.setTransformationAnchor(QGraphicsView.NoAnchor)  # anchoring is handled manually below
+        # Covers the viewport area outside the scene's own background
+        # (e.g. once panned/zoomed past the drawing's edge) with the same
+        # off-white paper tone, so there's no stark-white gap at the edges.
+        self.setBackgroundBrush(QBrush(BACKGROUND_COLOR))
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         factor = self.ZOOM_PER_TICK if event.angleDelta().y() > 0 else 1 / self.ZOOM_PER_TICK
@@ -724,6 +764,15 @@ class EditorWindow(QMainWindow):
         self.setCentralWidget(splitter)
         self.resize(1100, 800)
         self._build_menu()
+        # "Drag/rotate" tooltips (SelectionHandle.setToolTip) and status
+        # bar messages (export/reload/violation counts) are the only
+        # popup-style text that exists today — dark, on request, and
+        # explicitly regardless of the OS's own light/dark theme default.
+        self.setStyleSheet(
+            f"QToolTip {{ color: {LINE_COLOR.name()}; background-color: {BACKGROUND_COLOR.name()}; "
+            f"border: 1px solid {LINE_COLOR.name()}; }}"
+            f"QStatusBar {{ color: {LINE_COLOR.name()}; }}"
+        )
 
     def _build_menu(self) -> None:
         from PySide6.QtGui import QKeySequence
@@ -821,6 +870,12 @@ class EditorWindow(QMainWindow):
         self._rebuild_layers_menu()
         self._rebuild_scene()
         self._view.fitInView(self._view.scene().itemsBoundingRect(), Qt.KeepAspectRatio)
+        # fitInView() just changed the view's zoom, but the scene built
+        # a moment ago baked its line widths in for the *old* (identity)
+        # zoom — rebuild once more now that the real fitted zoom is
+        # known, so lines start out at the intended ~3px, not whatever
+        # `LINE_WIDTH_PX / 1.0` happened to look like on this scene.
+        self._rebuild_scene()
         self.setWindowTitle(f"Landscape Editor — {Path(scene_path).name}")
         self._watch_scene_file()
 
@@ -888,6 +943,7 @@ class EditorWindow(QMainWindow):
         # None (via _on_selection_changed) before the reselect step runs.
         previously_selected = self._selected_id
         doc = self.session.doc
+        zoom = self._view.transform().m11() or 1.0
         gscene = build_graphics_scene(
             self.session.resolved,
             self.session.materials,
@@ -898,6 +954,7 @@ class EditorWindow(QMainWindow):
             hidden_layers=self._hidden_layers,
             on_drag_start=self.session.push_undo,
             on_drag_end=self.session.autosave,
+            line_width=_line_width_for_zoom(zoom),
         )
         if self.session.rules:
             add_violation_overlays(gscene, self.session.violations, doc.page_height)

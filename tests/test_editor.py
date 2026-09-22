@@ -12,7 +12,16 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QGraphicsPathItem, QGraphicsSimpleTextItem, QGraphicsView
 from shapely.geometry import box
 
-from landscape.editor import EditableItem, EditorWindow, add_violation_overlays, build_graphics_scene
+from landscape.editor import (
+    BACKGROUND_COLOR,
+    LINE_COLOR,
+    EditableItem,
+    EditorWindow,
+    SceneGraphicsView,
+    _line_width_for_zoom,
+    add_violation_overlays,
+    build_graphics_scene,
+)
 from landscape.geometry import ResolvedObject, ResolvedScene
 from landscape.materials import Material, MaterialLibrary
 from landscape.rules import Violation
@@ -109,6 +118,63 @@ def test_material_item_uses_material_fill_color(qtbot):
     gscene = build_graphics_scene(scene, _tiny_library(), page_height=10)
     item = gscene.items()[0]
     assert item.brush().color().name().lower() == "#ff0000"
+
+
+def test_material_item_outline_is_the_uniform_charcoal_color_not_the_materials_own_edge_color(qtbot):
+    """Visual redesign, phase 1: every shape gets the same dark charcoal
+    outline for now, regardless of what its own material specifies —
+    a `Material` with an explicit (very different) edge color must
+    still render with `LINE_COLOR`, not that color."""
+    library = MaterialLibrary(
+        materials={"blue_edged": Material(id="blue_edged", name="Blue-edged", color="#FF0000", edge={"weight": 2.0, "color": "#0000FF"})}
+    )
+    scene = ResolvedScene(objects=[_obj("a", box(0, 0, 2, 2), material="blue_edged")])
+    gscene = build_graphics_scene(scene, library, page_height=10)
+    item = gscene.items()[0]
+    assert item.pen().color().name().lower() == LINE_COLOR.name().lower()
+
+
+def test_material_item_uses_the_given_line_width(qtbot):
+    scene = ResolvedScene(objects=[_obj("a", box(0, 0, 2, 2), material="red")])
+    gscene = build_graphics_scene(scene, _tiny_library(), page_height=10, line_width=0.42)
+    item = gscene.items()[0]
+    assert item.pen().widthF() == pytest.approx(0.42)
+
+
+def test_build_graphics_scene_has_an_off_white_background(qtbot):
+    scene = ResolvedScene(objects=[])
+    gscene = build_graphics_scene(scene, _tiny_library(), page_height=10)
+    assert gscene.backgroundBrush().color().name().lower() == BACKGROUND_COLOR.name().lower()
+
+
+def test_scene_graphics_view_has_an_off_white_background(qtbot):
+    view = SceneGraphicsView()
+    qtbot.addWidget(view)
+    assert view.backgroundBrush().color().name().lower() == BACKGROUND_COLOR.name().lower()
+
+
+def test_line_width_for_zoom_converts_target_pixels_into_scene_units():
+    from landscape.editor import LINE_WIDTH_PX
+
+    assert _line_width_for_zoom(1.0) == pytest.approx(LINE_WIDTH_PX)
+    assert _line_width_for_zoom(2.0) == pytest.approx(LINE_WIDTH_PX / 2)
+    assert _line_width_for_zoom(0.5) == pytest.approx(LINE_WIDTH_PX / 0.5)
+
+
+def test_rebuild_scene_recalculates_line_width_for_the_views_current_zoom(qtbot):
+    """The whole point of `_line_width_for_zoom`: line thickness should
+    "change depending on magnification" (Rich's own words), so a rebuild
+    that happens while the view is more zoomed in must produce a
+    correspondingly thinner scene-unit outline (still ~3 screen px)."""
+    window = _open_editor(qtbot)
+    item = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    width_before = item.pen().widthF()
+
+    window._view.scale(2.0, 2.0)
+    window._rebuild_scene()
+
+    item_after = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    assert item_after.pen().widthF() == pytest.approx(width_before / 2, rel=0.01)
 
 
 def test_editor_window_loads_example_scene(qtbot):
