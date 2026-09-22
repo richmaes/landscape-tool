@@ -624,6 +624,119 @@ def test_deselecting_removes_handles(qtbot):
     assert window._selection_handles == []
 
 
+def _mouse_drag(view: QGraphicsView, start_scene_pos: QPointF, end_scene_pos: QPointF) -> None:
+    """A *real* click-drag-release, dispatched through Qt's actual mouse
+    event pipeline (QTest.mousePress/mouseMove/mouseRelease on the
+    view's viewport, in viewport pixel coordinates via `mapFromScene`) —
+    not `handle.setPos()` + `handle.end_drag()`, which every existing
+    resize/rotate test uses and which completely bypasses
+    `QGraphicsItem`'s own default mouse handling. That gap is exactly
+    what let a real bug through undetected (see
+    `test_real_mouse_drag_on_rotate_handle_does_not_move_the_selected_object`'s
+    docstring) — Rich asked for "a legitimate GUI click and rotate test"
+    for precisely this reason."""
+    start = view.mapFromScene(start_scene_pos)
+    end = view.mapFromScene(end_scene_pos)
+    QTest.mousePress(view.viewport(), Qt.LeftButton, pos=start)
+    QTest.mouseMove(view.viewport(), pos=end)
+    QTest.mouseRelease(view.viewport(), Qt.LeftButton, pos=end)
+
+
+def test_real_mouse_drag_on_rotate_handle_does_not_move_the_selected_object(qtbot):
+    """A real, confirmed bug, found only by driving the rotate handle
+    with genuine QTest mouse events instead of `setPos()`: Qt's default
+    `QGraphicsItem.mouseMoveEvent`, when the scene has a selection,
+    moves that *whole selection* together with whatever movable item
+    you're actually dragging — even one, like a handle, that isn't
+    itself selected. Since the target object (`shed`) stays selected
+    for as long as its handles are shown, dragging the rotate handle
+    silently dragged `shed` too, translating it underneath the rotate
+    preview and moving its origin — exactly the "origin should not
+    change" invariant Rich flagged. Fixed by having `SelectionHandle`
+    own its press/move handling instead of relying on the
+    `QGraphicsItem` default. Reproduced with real numbers before fixing
+    (shed's centroid drifted from (5.5, 4.0) to roughly (8.44, 2.0)) and
+    confirmed fixed the same way.
+
+    Checks `transform.tx`/`ty` directly, not `shed.pos()`:
+    `EditableItem.itemChange` always vetoes its own Qt-level `pos()`
+    back to the old value and tracks movement through
+    `scene_object.transform` instead — `pos()` stays (0, 0) either way,
+    bug or no bug, which is exactly why it can't be trusted to reveal
+    this one."""
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    rotate_handle = next(h for h in window._selection_handles if h.kind == "rotate")
+    shed_object = window.session.doc.get("shed")
+    tx_before, ty_before = shed_object.transform.tx, shed_object.transform.ty  # "shed" starts at tx=0.5, not 0
+
+    center = rotate_handle._center
+    _mouse_drag(window._view, rotate_handle.pos(), QPointF(center.x() + 3, center.y()))
+
+    assert shed_object.transform.tx == tx_before
+    assert shed_object.transform.ty == ty_before
+
+
+def test_real_mouse_drag_rotates_the_object_without_moving_its_origin(qtbot):
+    """The end-to-end invariant Rich asked to lock in: rotating via a
+    real click-drag on the handle must change the object's rotation
+    but leave its origin (centroid) exactly where it was."""
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    rotate_handle = next(h for h in window._selection_handles if h.kind == "rotate")
+
+    rotation_before = window.session.doc.get("shed").transform.rotation
+    centroid_before = window.session.resolved.get("shed").geometry.centroid
+    before = (centroid_before.x, centroid_before.y)
+
+    center = rotate_handle._center
+    _mouse_drag(window._view, rotate_handle.pos(), QPointF(center.x() + 3, center.y()))
+
+    rotation_after = window.session.doc.get("shed").transform.rotation
+    centroid_after = window.session.resolved.get("shed").geometry.centroid
+    assert rotation_after != pytest.approx(rotation_before, abs=0.5)
+    assert centroid_after.x == pytest.approx(before[0], abs=0.01)
+    assert centroid_after.y == pytest.approx(before[1], abs=0.01)
+
+
+def test_real_mouse_drag_on_resize_handle_does_not_move_the_selected_object(qtbot):
+    """The same bug, other handle: dragging the resize handle with a
+    real mouse gesture must not translate the underlying object. Checks
+    `transform.tx`/`ty`, not `shed.pos()` — see the rotate-handle
+    version of this test for why `pos()` can't reveal this bug."""
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    resize_handle = next(h for h in window._selection_handles if h.kind == "resize")
+    shed_object = window.session.doc.get("shed")
+    tx_before, ty_before = shed_object.transform.tx, shed_object.transform.ty  # "shed" starts at tx=0.5, not 0
+
+    _mouse_drag(window._view, resize_handle.pos(), resize_handle.pos() + QPointF(0.5, 0.0))
+
+    assert shed_object.transform.tx == tx_before
+    assert shed_object.transform.ty == ty_before
+
+
+def test_real_mouse_drag_scales_the_object_without_moving_its_origin(qtbot):
+    """The end-to-end invariant Rich asked to lock in, for scale: a real
+    click-drag on the resize handle must change scale but leave the
+    object's origin (centroid) exactly where it was."""
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    resize_handle = next(h for h in window._selection_handles if h.kind == "resize")
+
+    scale_before = window.session.doc.get("shed").transform.scale
+    centroid_before = window.session.resolved.get("shed").geometry.centroid
+    before = (centroid_before.x, centroid_before.y)
+
+    _mouse_drag(window._view, resize_handle.pos(), resize_handle.pos() + QPointF(0.5, 0.0))
+
+    scale_after = window.session.doc.get("shed").transform.scale
+    centroid_after = window.session.resolved.get("shed").geometry.centroid
+    assert scale_after != pytest.approx(scale_before, abs=0.001)
+    assert centroid_after.x == pytest.approx(before[0], abs=0.01)
+    assert centroid_after.y == pytest.approx(before[1], abs=0.01)
+
+
 def test_resize_handle_updates_scale_and_syncs_panel(qtbot):
     window = _open_editor(qtbot)
     _select_only(window, "shed")

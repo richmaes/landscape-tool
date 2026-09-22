@@ -257,6 +257,32 @@ class SelectionHandle(QGraphicsEllipseItem):
         self._start_scale = 1.0
         self._start_rotation = 0.0
         self._final_value: float | None = None
+        self._press_scene_pos = QPointF()
+        self._press_item_pos = QPointF()
+
+    def mousePressEvent(self, event) -> None:
+        """Deliberately doesn't call `super()`/rely on `QGraphicsItem`'s
+        own default drag handling — a real, confirmed bug (only found by
+        driving this with genuine `QTest` mouse events, not the
+        `setPos()`-based tests that predate this): Qt's default
+        `mouseMoveEvent` for a *movable* item, when the scene has a
+        selection, moves that *whole selection* together with whatever
+        item you happen to be dragging — even one, like this handle,
+        that isn't itself selected. Since the target object stays
+        selected the entire time its handles are shown, dragging a
+        handle silently dragged the selected object too, corrupting its
+        position underneath the resize/rotate preview. Tracking the
+        press/move ourselves and calling `setPos()` directly (still
+        routed through `itemChange` below via `ItemSendsGeometryChanges`)
+        sidesteps that "move the whole selection" behavior entirely."""
+        self._press_scene_pos = event.scenePos()
+        self._press_item_pos = self.pos()
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:
+        delta = event.scenePos() - self._press_scene_pos
+        self.setPos(self._press_item_pos + delta)
+        event.accept()
 
     def _distance(self, pos) -> float:
         return math.hypot(pos.x() - self._center.x(), pos.y() - self._center.y())
@@ -306,7 +332,10 @@ class SelectionHandle(QGraphicsEllipseItem):
         return super().itemChange(change, value)
 
     def mouseReleaseEvent(self, event) -> None:
-        super().mouseReleaseEvent(event)
+        # No super() call here either — see mousePressEvent's docstring;
+        # this handler fully owns press/move/release, so there's no base
+        # class drag state left to hand off to.
+        event.accept()
         self.end_drag()
 
     def end_drag(self) -> None:
