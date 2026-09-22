@@ -33,7 +33,7 @@ import math
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QFileSystemWatcher, Qt
+from PySide6.QtCore import QFileSystemWatcher, QPointF, Qt
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QWheelEvent
 from PySide6.QtWidgets import (
     QComboBox,
@@ -451,17 +451,47 @@ class SceneGraphicsView(QGraphicsView):
     design-tool convention); plain drag otherwise selects/moves items —
     `QGraphicsView.ScrollHandDrag` as the *default* drag mode would
     swallow every left-drag for panning and starve item selection, so it's
-    only active while space is down."""
+    only active while space is down.
+
+    Zoom anchors on the selected object's center when exactly one object
+    is selected — the same fixed, predictable origin `SelectionHandle`
+    already rotates/resizes about — or the viewport center otherwise.
+    Deliberately not `AnchorUnderMouse`: that anchor point depends on
+    incidental mouse position, which is the opposite of "the same origin
+    as the rotation axis." `setTransformationAnchor` only offers
+    "under the mouse" or "view center," neither of which is "the
+    selected object," so this computes the correction manually: note the
+    anchor's viewport pixel position, scale, then scroll to put that
+    scene point back at the same pixel."""
+
+    ZOOM_PER_TICK = 1.05  # was 1.15; that felt too aggressive per scroll tick
 
     def __init__(self, scene: QGraphicsScene | None = None):
         super().__init__(scene)
         self.setRenderHint(QPainter.Antialiasing)
         self.setDragMode(QGraphicsView.NoDrag)
-        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setTransformationAnchor(QGraphicsView.NoAnchor)  # anchoring is handled manually below
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
+        factor = self.ZOOM_PER_TICK if event.angleDelta().y() > 0 else 1 / self.ZOOM_PER_TICK
+        self._scale_anchored_at(factor, self._zoom_anchor_point())
+
+    def _zoom_anchor_point(self) -> QPointF:
+        scene = self.scene()
+        if scene is not None:
+            selected = scene.selectedItems()
+            if len(selected) == 1:
+                return selected[0].sceneBoundingRect().center()
+        return self.mapToScene(self.viewport().rect().center())
+
+    def _scale_anchored_at(self, factor: float, scene_point: QPointF) -> None:
+        viewport_pos_before = self.mapFromScene(scene_point)
         self.scale(factor, factor)
+        viewport_pos_after = self.mapFromScene(scene_point)
+        delta = viewport_pos_after - viewport_pos_before
+        h, v = self.horizontalScrollBar(), self.verticalScrollBar()
+        h.setValue(h.value() + round(delta.x()))
+        v.setValue(v.value() + round(delta.y()))
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Space:

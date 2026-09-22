@@ -169,6 +169,52 @@ def test_real_wheel_event_scroll_down_zooms_out(qtbot):
     assert window._view.transform().m11() < before
 
 
+def test_zoom_per_tick_matches_the_configured_rate(qtbot):
+    from landscape.editor import SceneGraphicsView
+
+    window = _open_editor(qtbot)
+    before = window._view.transform().m11()
+
+    QApplication.sendEvent(window._view.viewport(), _wheel_event(120))
+
+    assert window._view.transform().m11() == pytest.approx(before * SceneGraphicsView.ZOOM_PER_TICK)
+
+
+def test_zoom_anchors_on_selected_object_when_something_is_selected(qtbot):
+    """Rich's request: zoom should anchor on the same origin as the
+    rotation axis (the selected object's center), not wherever the mouse
+    happens to be. Needs an actual scroll range to prove anything — right
+    after fitInView the whole scene already fits the viewport, so there's
+    nowhere to scroll to and no anchor choice could possibly matter."""
+    window = _open_editor(qtbot)
+    window.resize(800, 600)
+    window.show()
+    window._view.scale(5.0, 5.0)  # establish a real scroll range
+    _select_only(window, "shed")
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    obj_center = shed.sceneBoundingRect().center()
+    pixel_before = window._view.mapFromScene(obj_center)
+
+    QApplication.sendEvent(window._view.viewport(), _wheel_event(120))
+
+    pixel_after = window._view.mapFromScene(obj_center)
+    assert (pixel_after - pixel_before).manhattanLength() <= 1
+
+
+def test_zoom_anchors_on_viewport_center_when_nothing_is_selected(qtbot):
+    window = _open_editor(qtbot)
+    window.resize(800, 600)
+    window.show()
+    window._view.scale(5.0, 5.0)
+    anchor_point = window._view.mapToScene(window._view.viewport().rect().center())
+    pixel_before = window._view.mapFromScene(anchor_point)
+
+    QApplication.sendEvent(window._view.viewport(), _wheel_event(120))
+
+    pixel_after = window._view.mapFromScene(anchor_point)
+    assert (pixel_after - pixel_before).manhattanLength() <= 1
+
+
 def test_real_space_keypress_enables_pan_mode(qtbot):
     window = _open_editor(qtbot)
     window._view.setFocus()
