@@ -1,6 +1,6 @@
 # Landscape Rendering Tool — Task List
 
-**Status:** M0–M4 complete — M5 flat renderer (or M1's leftover objects.json-to-YAML conversion) is the next work
+**Status:** M0–M5 and M3b complete — per the suggested order of attack below, M8 (editor) is next, but it's blocked on the open "UI stack" question; M7 export has no such blocker and is next-next in that same ordering, so it's a reasonable thing to do while that question is open
 **Last updated:** 2026-09-21
 
 ## Decisions locked in
@@ -175,13 +175,19 @@ across the project).
 - [x] Material resolution: object to material to render parameters, with sensible fallback — `MaterialLibrary.resolve()`; unknown or `None` material ids fall back to an unmistakable magenta (`#FF00FF`) rather than crashing or rendering blank
 - [x] Visual swatch picking — the designer chooses materials by appearance and name, never by hex code — `render_swatch()` gives a flat-color `PIL.Image` swatch for M8's material picker to display; the picker UI itself is M8's job
 
-## M5 — Renderer: flat pastel mode
+## M5 — Renderer: flat pastel mode  *(complete — the real end-to-end path now works)*
 
-- [ ] Rendering abstraction so both modes share scene traversal (backend-agnostic draw calls)
-- [ ] Fill each region with its flat pastel color
-- [ ] Outline style — weight, color, whether outlines are per-material
-- [ ] Labels/callouts and an optional legend keyed to materials
-- [ ] Vector-native output (clean SVG/PDF, no rasterization)
+Implemented in `src/landscape/render_flat.py`. `landscape render
+scenes/example.yaml --mode flat --out out/plan.png` — the exact command
+this file's own example — now actually works, wired up in
+`src/landscape/cli.py`. 15 new tests (10 in `tests/test_render_flat.py`,
+5 updated/added in `tests/test_cli.py`); 108 tests total.
+
+- [x] Rendering abstraction so both modes share scene traversal (backend-agnostic draw calls) — `render_flat(ctx, scene, materials, ...)` draws onto whatever `cairo.Context` it's given; `iter_paint_order_with_material()` is the shared paint-order walk M6 is expected to reuse
+- [x] Fill each region with its flat pastel color — via `MaterialLibrary.resolve()` (M4)
+- [x] Outline style — weight, color, whether outlines are per-material — each material's own `edge: {weight, color}` (M4); `color: null` falls back to a darkened shade of the fill, not one global stroke color
+- [x] Labels/callouts and an optional legend keyed to materials — annotations (`annotation: true`) and keepout zones (a `Keepout` primitive's `.rule`) get a dashed outline + text label instead of a fill (a real bug caught by actually looking at a render: keepout zones were being flat-filled with the "missing material" fallback color before this fix, since M2's own schema says a keepout "carries a rule rather than a material"); `--legend` draws a swatch+name list of materials actually used, via the independently-tested `used_materials_in_scene()`
+- [x] Vector-native output (clean SVG/PDF, no rasterization) — `render_scene_to_svg`/`render_scene_to_pdf` use `cairo.SVGSurface`/`PDFSurface` directly; `render_scene_to_png` (needed for on-screen preview and now wired into the CLI) is the one raster path, using the same `render_flat()` call over an `ImageSurface`
 
 ## M6 — Renderer: hand-drawn pastel art mode
 

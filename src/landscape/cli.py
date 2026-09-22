@@ -1,12 +1,30 @@
 """CLI entry point: `landscape render scene.yaml --mode flat --out out/plan.png`
 
 Developer back door per the project decisions in TODO.md; the graphical
-editor (M8) is the primary interface. Rendering itself lands with M2/M3/M5 —
-this skeleton only wires up argument parsing so the command exists early.
+editor (M8) is the primary interface. `--mode flat` is the M5 end-to-end
+path: load, resolve, render. `--mode art` still stubs out since M6 hasn't
+picked its texture techniques yet.
+
+Run from the repo root: `--materials` defaults to `assets/materials.yaml`,
+resolved relative to the current directory, not installed as package data.
 """
+
+from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
+
+from .geometry import resolve_scene
+from .materials import load_materials
+from .render_flat import render_scene_to_pdf, render_scene_to_png, render_scene_to_svg
+from .scene_io import load_scene
+
+_RENDERERS = {
+    ".svg": render_scene_to_svg,
+    ".pdf": render_scene_to_pdf,
+    ".png": render_scene_to_png,
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,7 +39,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="flat",
         help="Render mode: flat pastel color-coding or hand-drawn pastel art",
     )
-    render.add_argument("--out", required=True, help="Output file path")
+    render.add_argument("--out", required=True, help="Output file path (.svg, .pdf, or .png)")
+    render.add_argument(
+        "--materials", default="assets/materials.yaml", help="Path to a material library YAML file"
+    )
+    render.add_argument("--legend", action="store_true", help="Draw a material legend")
+    render.add_argument(
+        "--show-annotations", action="store_true", help="Draw annotation objects (technical view)"
+    )
+    render.add_argument("--dpi-scale", type=float, default=1.0, help="PNG-only resolution multiplier")
 
     return parser
 
@@ -31,11 +57,27 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "render":
-        parser.exit(
-            1,
-            "landscape render: not yet implemented (scene schema and geometry "
-            "engine land in M2/M3)\n",
-        )
+        if args.mode == "art":
+            parser.exit(
+                1,
+                "landscape render --mode art: not yet implemented "
+                "(M6 hasn't picked its texture techniques yet)\n",
+            )
+
+        out_path = Path(args.out)
+        renderer = _RENDERERS.get(out_path.suffix.lower())
+        if renderer is None:
+            parser.exit(1, f"landscape render: unsupported --out extension '{out_path.suffix}' (use .svg, .pdf, or .png)\n")
+
+        doc = load_scene(args.scene)
+        scene = resolve_scene(doc)
+        materials = load_materials(args.materials)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        kwargs = {"show_legend": args.legend, "show_annotations": args.show_annotations}
+        if renderer is render_scene_to_png:
+            kwargs["dpi_scale"] = args.dpi_scale
+        renderer(doc, scene, materials, out_path, **kwargs)
 
     return 0
 
