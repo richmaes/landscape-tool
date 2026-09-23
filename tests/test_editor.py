@@ -246,27 +246,6 @@ def test_zoom_per_tick_matches_the_configured_rate(qtbot):
     assert window._view.transform().m11() == pytest.approx(before * SceneGraphicsView.ZOOM_PER_TICK)
 
 
-def test_zoom_anchors_on_selected_object_when_something_is_selected(qtbot):
-    """Rich's request: zoom should anchor on the same origin as the
-    rotation axis (the selected object's center), not wherever the mouse
-    happens to be. Needs an actual scroll range to prove anything — right
-    after fitInView the whole scene already fits the viewport, so there's
-    nowhere to scroll to and no anchor choice could possibly matter."""
-    window = _open_editor(qtbot)
-    window.resize(800, 600)
-    window.show()
-    window._view.scale(5.0, 5.0)  # establish a real scroll range
-    _select_only(window, "shed")
-    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
-    obj_center = shed.sceneBoundingRect().center()
-    pixel_before = window._view.mapFromScene(obj_center)
-
-    QApplication.sendEvent(window._view.viewport(), _wheel_event(120))
-
-    pixel_after = window._view.mapFromScene(obj_center)
-    assert (pixel_after - pixel_before).manhattanLength() <= 1
-
-
 def test_zoom_anchors_on_viewport_center_when_nothing_is_selected(qtbot):
     window = _open_editor(qtbot)
     window.resize(800, 600)
@@ -279,6 +258,65 @@ def test_zoom_anchors_on_viewport_center_when_nothing_is_selected(qtbot):
 
     pixel_after = window._view.mapFromScene(anchor_point)
     assert (pixel_after - pixel_before).manhattanLength() <= 1
+
+
+def test_zoom_anchor_stays_the_viewport_center_even_with_an_object_selected(qtbot):
+    """Simplified on request, 2026-09-23: zoom used to anchor on the
+    *selected object's* center instead of the viewport center whenever
+    exactly one object was selected — Rich's own earlier request, made
+    when adding the previous zoom fix. After using it for real, he asked
+    to simplify: the anchor point silently jumping between "the viewport
+    center" and "some object's center" the moment something got
+    selected or deselected was itself part of what read as "zoom out
+    seems to scale wildly and then recenter" — an inconsistency, not
+    just a numerical bug. Now the anchor is *always* the viewport
+    center ("the center of the image"), regardless of selection —
+    matching his new, explicit instruction ("on zoom in, we should zoom
+    in on the center of the image... keep it simple for now"). This
+    test is the direct regression guard for that: selecting `shed`
+    first must not change where the zoom anchors."""
+    window = _open_editor(qtbot)
+    window.resize(800, 600)
+    window.show()
+    window._view.scale(5.0, 5.0)
+    _select_only(window, "shed")
+    viewport_center_scene = window._view.mapToScene(window._view.viewport().rect().center())
+    pixel_before = window._view.mapFromScene(viewport_center_scene)
+
+    QApplication.sendEvent(window._view.viewport(), _wheel_event(120))
+
+    pixel_after = window._view.mapFromScene(viewport_center_scene)
+    assert (pixel_after - pixel_before).manhattanLength() <= 1
+
+
+def test_real_wheel_event_zoom_out_past_the_initial_fit_stays_smooth(qtbot):
+    """The actual bug Rich reported: "zoom out seems to scale wildly and
+    then recenter." Zooming out from a fresh load (no manual zoom-in
+    first) crosses the point where the whole scene already fits inside
+    the viewport — exactly the edge case the *old* scrollbar-based
+    anchor correction admitted it couldn't handle (nothing to scroll to,
+    so nothing for the correction to adjust) — Qt's own built-in
+    `AnchorViewCenter` handles it instead. Drives 40 real wheel-event
+    zoom-out ticks (well past that threshold: the view ends up at a
+    fraction of its starting zoom) and asserts no single tick's drift
+    at the viewport center is anything close to "wild" — a generous
+    bound given some genuine sub-pixel drift is normal (integer-pixel
+    quantization of the viewport's center, mapped through a
+    continuously-changing zoom transform, was never going to land on
+    the exact same scene point every single tick)."""
+    window = _open_editor(qtbot)
+    window.resize(800, 600)
+    window.show()
+
+    max_drift = 0.0
+    for _ in range(40):
+        center_before = window._view.mapToScene(window._view.viewport().rect().center())
+        QApplication.sendEvent(window._view.viewport(), _wheel_event(-120))
+        center_after = window._view.mapToScene(window._view.viewport().rect().center())
+        drift = center_after - center_before
+        max_drift = max(max_drift, (drift.x() ** 2 + drift.y() ** 2) ** 0.5)
+
+    assert max_drift < 1.0  # empirically ~0.5 at worst; "wild" would be many scene units
 
 
 def test_real_space_keypress_enables_pan_mode(qtbot):

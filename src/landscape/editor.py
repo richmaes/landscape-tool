@@ -572,16 +572,29 @@ class SceneGraphicsView(QGraphicsView):
     swallow every left-drag for panning and starve item selection, so it's
     only active while space is down.
 
-    Zoom anchors on the selected object's center when exactly one object
-    is selected — the same fixed, predictable origin `SelectionHandle`
-    already rotates/resizes about — or the viewport center otherwise.
-    Deliberately not `AnchorUnderMouse`: that anchor point depends on
-    incidental mouse position, which is the opposite of "the same origin
-    as the rotation axis." `setTransformationAnchor` only offers
-    "under the mouse" or "view center," neither of which is "the
-    selected object," so this computes the correction manually: note the
-    anchor's viewport pixel position, scale, then scroll to put that
-    scene point back at the same pixel."""
+    Zoom always anchors on the current center of the viewport — "the
+    center of the image," both zooming in and out — via Qt's built-in
+    `AnchorViewCenter`. Simplified on request 2026-09-23, replacing an
+    earlier version that anchored on the *selected object's* center
+    instead (falling back to the viewport center only when nothing was
+    selected), with the anchor point manually corrected afterwards by
+    hand via the scrollbars. That approach had two real problems, one
+    of them Rich's own bug report ("zoom out seems to scale wildly and
+    then recenter"): the anchor point would silently jump between the
+    viewport center and an object's center the moment something got
+    selected or deselected mid-session, with no visual continuity
+    between the two; and the manual scrollbar correction turned out to
+    mostly be a no-op in practice, since `QGraphicsView`'s *implicit*
+    scene rect (used whenever `setSceneRect()` was never called
+    explicitly, which this app never does) auto-expands to always
+    include the current viewport — so the scrollbar range was `(0, 0)`
+    almost all the time, before or after zooming, leaving nothing for
+    that correction to actually adjust. `AnchorViewCenter` is Qt's own
+    built-in, well-tested handling of exactly this "zoom about the
+    view's center" case, including that same edge case, so it replaces
+    the hand-rolled version outright rather than patching it. Per-object
+    zoom-following (matching the *rotation axis* the resize/rotate
+    handles use) is a "fancier zoom" left for later, on request."""
 
     ZOOM_PER_TICK = 1.05  # was 1.15; that felt too aggressive per scroll tick
 
@@ -589,7 +602,7 @@ class SceneGraphicsView(QGraphicsView):
         super().__init__(scene)
         self.setRenderHint(QPainter.Antialiasing)
         self.setDragMode(QGraphicsView.NoDrag)
-        self.setTransformationAnchor(QGraphicsView.NoAnchor)  # anchoring is handled manually below
+        self.setTransformationAnchor(QGraphicsView.AnchorViewCenter)
         # Covers the viewport area outside the scene's own background
         # (e.g. once panned/zoomed past the drawing's edge) with the same
         # off-white paper tone, so there's no stark-white gap at the edges.
@@ -597,24 +610,7 @@ class SceneGraphicsView(QGraphicsView):
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         factor = self.ZOOM_PER_TICK if event.angleDelta().y() > 0 else 1 / self.ZOOM_PER_TICK
-        self._scale_anchored_at(factor, self._zoom_anchor_point())
-
-    def _zoom_anchor_point(self) -> QPointF:
-        scene = self.scene()
-        if scene is not None:
-            selected = scene.selectedItems()
-            if len(selected) == 1:
-                return selected[0].sceneBoundingRect().center()
-        return self.mapToScene(self.viewport().rect().center())
-
-    def _scale_anchored_at(self, factor: float, scene_point: QPointF) -> None:
-        viewport_pos_before = self.mapFromScene(scene_point)
         self.scale(factor, factor)
-        viewport_pos_after = self.mapFromScene(scene_point)
-        delta = viewport_pos_after - viewport_pos_before
-        h, v = self.horizontalScrollBar(), self.verticalScrollBar()
-        h.setValue(h.value() + round(delta.x()))
-        v.setValue(v.value() + round(delta.y()))
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Space:
