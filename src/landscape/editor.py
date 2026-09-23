@@ -149,6 +149,7 @@ class EditableItem(QGraphicsPathItem):
         self._on_drag_start = on_drag_start
         self._on_drag_end = on_drag_end
         self._dragging = False
+        self._last_scene_pos = QPointF()
         self.setData(_OBJECT_ID_ROLE, scene_object.id)
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.ItemIsMovable, True)
@@ -174,8 +175,49 @@ class EditableItem(QGraphicsPathItem):
             return self.pos()  # veto Qt's own pos(); the path already moved
         return super().itemChange(change, value)
 
+    def mousePressEvent(self, event) -> None:
+        """Deliberately doesn't call `super()`/rely on `QGraphicsItem`'s
+        own default drag handling — a real, confirmed bug (found the same
+        way as `SelectionHandle`'s "drags the whole selection" bug: a
+        genuine multi-step `QTest` mouse drag, not a single `setPos()`
+        jump). Qt's default `mouseMoveEvent`, on every move event,
+        recomputes the new position as `press-time pos() + (current
+        mouse scenePos - press-time mouse scenePos)` — the *cumulative*
+        offset since press, using its own cached `pos()` as the
+        reference. But `itemChange` above always vetoes `pos()` back to
+        its original (frozen) value, since this class deliberately
+        tracks position via `scene_object.transform`/the path instead
+        of Qt's own `pos()`. So on the *second* move event onward, Qt
+        recomputes that same cumulative offset from the same frozen
+        reference, and `itemChange`'s `delta = value - self.pos()`
+        reads that whole cumulative amount as if it were just this one
+        event's incremental step — applying the growing cumulative
+        total again on top of what's already been applied, every single
+        event. A real continuous drag (many small move events, the way
+        an actual mouse produces them) compounds this every step,
+        producing exactly what Rich reported: the object "accelerates
+        beyond the cursor." A single-jump test (press once, one big
+        move, release) never triggers this, since there's no *second*
+        event during which the compounding could show up — the same
+        reason `SelectionHandle`'s bug needed a real, driven mouse
+        gesture to catch, not `setPos()`. Fixed by tracking the mouse's
+        own last scene position ourselves and always feeding
+        `itemChange` a true incremental, per-event delta, independent of
+        whatever `pos()` Qt itself believes this item is at."""
+        self._last_scene_pos = event.scenePos()
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:
+        delta = event.scenePos() - self._last_scene_pos
+        self._last_scene_pos = event.scenePos()
+        self.setPos(self.pos() + delta)
+        event.accept()
+
     def mouseReleaseEvent(self, event) -> None:
-        super().mouseReleaseEvent(event)
+        # No super() call — see mousePressEvent's docstring; this handler
+        # fully owns press/move/release now, so there's no base-class
+        # drag state left to hand off to.
+        event.accept()
         if self._dragging:
             self._dragging = False
             if self._on_drag_end:

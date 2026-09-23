@@ -358,6 +358,83 @@ def test_dragging_an_item_updates_the_document_transform(qtbot):
     assert shed.pos() == QPointF(0, 0)
 
 
+def test_real_multi_step_mouse_drag_moves_by_exactly_the_mouse_distance(qtbot):
+    """A real, confirmed bug, the third in this same family (rotate
+    handle, resize handle, and now plain object move) — found only by
+    driving a drag with *several* real `QTest.mouseMove` events instead
+    of one big jump. Rich's report: "when I move an object, it seems to
+    accelerate beyond the cursor off the page."
+
+    Root cause: `EditableItem.itemChange` always vetoes Qt's own `pos()`
+    back to its original (frozen) value — deliberately, since this class
+    tracks position through `scene_object.transform`/the path instead
+    (see the class docstring). Qt's *default* `mouseMoveEvent`, on every
+    move event, recomputes the new position as `press-time pos() +
+    (current mouse scenePos - press-time mouse scenePos)` — the
+    cumulative offset since press, referenced against its own cached
+    `pos()`. Since that `pos()` never actually advances (it's vetoed
+    every time), Qt recomputes that same growing cumulative offset on
+    every subsequent event too, and `itemChange`'s `delta = value -
+    self.pos()` reads the whole cumulative amount as if it were just
+    this event's incremental step — applying it on top of what's
+    already been applied, every single event. A single-jump drag
+    (press, one big move, release) never triggers this, since
+    compounding needs a *second* event to show up at all.
+
+    Fixed the same way as the rotate/resize handles: `EditableItem` now
+    owns its own press/move handling (tracking the mouse's last scene
+    position itself and feeding `itemChange` a true incremental
+    per-event delta), instead of relying on `QGraphicsItem`'s default."""
+    window = _open_editor(qtbot)
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    window._view.scene().clearSelection()
+    shed.setSelected(True)
+    tx_before, ty_before = window.session.doc.get("shed").transform.tx, window.session.doc.get("shed").transform.ty
+
+    page_height = window.session.doc.page_height
+    start = QPointF(5.5, page_height - 4.0)  # a point on "shed", in Qt/y-flipped coords
+    end = start + QPointF(3.0, 0.0)
+    _mouse_drag(window._view, start, end, steps=10)
+
+    tx_after, ty_after = window.session.doc.get("shed").transform.tx, window.session.doc.get("shed").transform.ty
+    assert tx_after - tx_before == pytest.approx(3.0, abs=0.1)
+    assert ty_after - ty_before == pytest.approx(0.0, abs=0.1)
+
+
+def test_real_multi_step_mouse_drag_is_consistent_regardless_of_distance_from_the_origin(qtbot):
+    """The other half of Rich's ask: the same physical drag must produce
+    the same translation whether the object sits near the scene origin
+    or far from it. The bug above was actually independent of an
+    object's position (the frozen reference was always Qt's `pos()`,
+    which is always (0, 0) for every `EditableItem` regardless of where
+    it's drawn) — but that's exactly the kind of assumption worth
+    locking in with a real test rather than trusting it held by
+    accident. "shed" sits near the origin (~5, 4); "hot_tub_pad" sits
+    far from it (~25-34, 25-34)."""
+    window = _open_editor(qtbot)
+    page_height = window.session.doc.page_height
+
+    def drag_delta(object_id: str, click_scene_xy: tuple[float, float]) -> QPointF:
+        item = next(i for i in window._view.scene().items() if i.data(0) == object_id)
+        window._view.scene().clearSelection()
+        item.setSelected(True)
+        obj = window.session.doc.get(object_id)
+        before = QPointF(obj.transform.tx, obj.transform.ty)
+
+        start = QPointF(click_scene_xy[0], page_height - click_scene_xy[1])
+        _mouse_drag(window._view, start, start + QPointF(3.0, 0.0), steps=10)
+
+        after = QPointF(obj.transform.tx, obj.transform.ty)
+        return after - before
+
+    near_origin_delta = drag_delta("shed", (5.3, 3.8))  # a corner of "shed", clear of its handles
+    far_from_origin_delta = drag_delta("hot_tub_pad", (25.3, 25.3))  # a corner not overlapped by "hot_tub"
+
+    assert near_origin_delta.x() == pytest.approx(3.0, abs=0.1)
+    assert far_from_origin_delta.x() == pytest.approx(3.0, abs=0.1)
+    assert near_origin_delta.x() == pytest.approx(far_from_origin_delta.x(), abs=0.1)
+
+
 def test_rotation_panel_edit_updates_document_and_rebuilds(qtbot):
     window = _open_editor(qtbot)
     shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
@@ -624,7 +701,7 @@ def test_deselecting_removes_handles(qtbot):
     assert window._selection_handles == []
 
 
-def _mouse_drag(view: QGraphicsView, start_scene_pos: QPointF, end_scene_pos: QPointF) -> None:
+def _mouse_drag(view: QGraphicsView, start_scene_pos: QPointF, end_scene_pos: QPointF, steps: int = 1) -> None:
     """A *real* click-drag-release, dispatched through Qt's actual mouse
     event pipeline (QTest.mousePress/mouseMove/mouseRelease on the
     view's viewport, in viewport pixel coordinates via `mapFromScene`) —
@@ -634,11 +711,22 @@ def _mouse_drag(view: QGraphicsView, start_scene_pos: QPointF, end_scene_pos: QP
     what let a real bug through undetected (see
     `test_real_mouse_drag_on_rotate_handle_does_not_move_the_selected_object`'s
     docstring) — Rich asked for "a legitimate GUI click and rotate test"
-    for precisely this reason."""
+    for precisely this reason.
+
+    `steps` > 1 sends several intermediate `mouseMove`s instead of one
+    big jump — a real drag, not a teleport. This matters: the
+    move-acceleration bug (see
+    `test_real_multi_step_mouse_drag_moves_by_exactly_the_mouse_distance`)
+    only shows up across a *second* move event, since it's a compounding
+    bug — a single-jump drag (`steps=1`, the default, fine for the
+    handle tests above) can't reveal it."""
     start = view.mapFromScene(start_scene_pos)
     end = view.mapFromScene(end_scene_pos)
     QTest.mousePress(view.viewport(), Qt.LeftButton, pos=start)
-    QTest.mouseMove(view.viewport(), pos=end)
+    for i in range(1, steps + 1):
+        frac = i / steps
+        intermediate = start_scene_pos + (end_scene_pos - start_scene_pos) * frac
+        QTest.mouseMove(view.viewport(), pos=view.mapFromScene(intermediate))
     QTest.mouseRelease(view.viewport(), Qt.LeftButton, pos=end)
 
 
