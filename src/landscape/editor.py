@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QFileSystemWatcher, QPointF, Qt
-from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QWheelEvent
+from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPainterPathStroker, QPen, QWheelEvent
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -134,9 +134,16 @@ class EditableItem(QGraphicsPathItem):
         on_moved: Callable[[str], None] | None = None,
         on_drag_start: Callable[[], None] | None = None,
         on_drag_end: Callable[[], None] | None = None,
+        outline_hit_width: float | None = None,
     ):
         super().__init__(path)
         self.scene_object = scene_object
+        # Set for the dashed, unfilled objects (annotations, keepouts):
+        # only a band this wide along the outline is clickable, so their
+        # empty interior doesn't steal clicks from whatever sits inside
+        # them (the hot tub inside the ground-cover box, the firepit
+        # inside its keepout). See `shape()`.
+        self._outline_hit_width = outline_hit_width
         # Shapely's true centroid (in this item's Qt/y-flipped coordinates),
         # not the bounding-box center: `geometry._apply_transform` pivots
         # scale/rotation about `origin="centroid"`, and for any asymmetric
@@ -155,6 +162,20 @@ class EditableItem(QGraphicsPathItem):
         self.setFlag(QGraphicsItem.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
 
+    def shape(self) -> QPainterPath:
+        if self._outline_hit_width is None:
+            return super().shape()
+        stroker = QPainterPathStroker()
+        stroker.setWidth(self._outline_hit_width)
+        return stroker.createStroke(self.path())
+
+    def boundingRect(self):
+        # The hit band extends past the drawn pen; Qt only hit-tests
+        # within boundingRect(), so it has to cover the whole band.
+        if self._outline_hit_width is None:
+            return super().boundingRect()
+        return super().boundingRect().united(self.shape().boundingRect())
+
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange and self.scene() is not None:
             delta = value - self.pos()
@@ -170,6 +191,10 @@ class EditableItem(QGraphicsPathItem):
                 self.scene_object.transform.ty += -delta.y()
                 self.setPath(self.path().translated(delta.x(), delta.y()))
                 self.centroid += delta  # translation shifts the centroid by the same delta
+                for child in self.childItems():  # e.g. an annotation's label
+                    # pos() never changes (vetoed below), so children
+                    # don't follow on their own — move them explicitly.
+                    child.moveBy(delta.x(), delta.y())
                 if self._on_moved:
                     self._on_moved(self.scene_object.id)
             return self.pos()  # veto Qt's own pos(); the path already moved
@@ -459,14 +484,35 @@ def _add_material_item(
 
 
 def _add_annotation_item(
-    scene: QGraphicsScene, obj: ResolvedObject, label: str, page_height: float, line_width: float = 0.2
+    scene: QGraphicsScene,
+    obj: ResolvedObject,
+    label: str,
+    page_height: float,
+    line_width: float = 0.2,
+    scene_object: SceneObject | None = None,
+    on_moved: Callable[[str], None] | None = None,
+    on_drag_start: Callable[[], None] | None = None,
+    on_drag_end: Callable[[], None] | None = None,
 ) -> None:
     """Annotations and keepout zones: dashed outline, no fill, a text
-    label at the centroid — mirrors `render_flat._draw_annotation`. Not
-    selectable/movable in this slice."""
+    label at the centroid — mirrors `render_flat._draw_annotation`.
+
+    With a `scene_object`, selectable/movable/resizable/rotatable like
+    any other object (Rich couldn't select the firepit keepout or the
+    ground-cover box around the deck), but clickable only along the
+    outline — see `EditableItem.shape()`. The hit band is a few times the
+    drawn line width, so it's easy to grab without being much wider than
+    the line itself on screen."""
     path = _path_for_geometry(obj.geometry, page_height)
-    item = QGraphicsPathItem(path)
-    item.setData(_OBJECT_ID_ROLE, obj.id)
+    if scene_object is not None:
+        c = obj.geometry.centroid
+        centroid = QPointF(c.x, page_height - c.y)
+        item: QGraphicsPathItem = EditableItem(
+            path, scene_object, centroid, on_moved, on_drag_start, on_drag_end, outline_hit_width=line_width * 3
+        )
+    else:
+        item = QGraphicsPathItem(path)
+        item.setData(_OBJECT_ID_ROLE, obj.id)
     pen = QPen(LINE_COLOR)
     pen.setStyle(Qt.DashLine)
     pen.setWidthF(line_width)
@@ -475,13 +521,16 @@ def _add_annotation_item(
     scene.addItem(item)
 
     centroid = obj.geometry.centroid
-    text = QGraphicsSimpleTextItem(label)
+    # A child of the outline, so it travels with it when dragged (see
+    # EditableItem.itemChange) — and never takes clicks itself, so it
+    # can't block whatever is under it.
+    text = QGraphicsSimpleTextItem(label, item)
+    text.setAcceptedMouseButtons(Qt.NoButton)
     text.setBrush(QBrush(TEXT_COLOR))
     font = text.font()
     font.setPointSizeF(0.8)
     text.setFont(font)
     text.setPos(centroid.x, page_height - centroid.y)
-    scene.addItem(text)
 
 
 def build_graphics_scene(
@@ -498,7 +547,8 @@ def build_graphics_scene(
 ) -> QGraphicsScene:
     """The same picture `render_flat` draws, as interactive QGraphicsItems
     instead of a flattened cairo surface. Pass `doc` (the source
-    `SceneDocument`) to make material-bearing objects selectable/movable —
+    `SceneDocument`) to make objects selectable/movable (annotations and
+    keepouts included, clickable along their dashed outline only) —
     without it, this builds a read-only preview, same as before this
     became editable. `on_object_moved(object_id)` fires after a drag bakes
     itself into that object's transform, for anyone (the editor's
@@ -525,7 +575,10 @@ def build_graphics_scene(
             continue
         if obj.annotation or obj.rule:
             label = f"{obj.id} ({obj.rule})" if obj.rule else obj.id
-            _add_annotation_item(gscene, obj, label, page_height, line_width)
+            scene_object = doc.get(obj.id) if doc is not None else None
+            _add_annotation_item(
+                gscene, obj, label, page_height, line_width, scene_object, on_object_moved, on_drag_start, on_drag_end
+            )
             continue
         material = materials.resolve(obj.material)
         scene_object = doc.get(obj.id) if doc is not None else None
@@ -634,6 +687,10 @@ class SceneGraphicsView(QGraphicsView):
         self.setRenderHint(QPainter.Antialiasing)
         self.setDragMode(QGraphicsView.NoDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorViewCenter)
+        # Track the pointer even with no button held, so Tab knows what's
+        # under it now, not just where the last click was.
+        self.setMouseTracking(True)
+        self._pointer_pos = None  # viewport pixels, not scene coords — survives zoom/pan
         # Covers the viewport area outside the scene's own background
         # (e.g. once panned/zoomed past the drawing's edge) with the same
         # off-white paper tone, so there's no stark-white gap at the edges.
@@ -642,6 +699,45 @@ class SceneGraphicsView(QGraphicsView):
     def wheelEvent(self, event: QWheelEvent) -> None:
         factor = self.ZOOM_PER_TICK if event.angleDelta().y() > 0 else 1 / self.ZOOM_PER_TICK
         self.scale(factor, factor)
+
+    def mousePressEvent(self, event) -> None:
+        self._pointer_pos = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        self._pointer_pos = event.position().toPoint()
+        super().mouseMoveEvent(event)
+
+    def focusNextPrevChild(self, next: bool) -> bool:
+        """Qt calls this for Tab/Shift+Tab while the canvas has focus. With
+        an object selected, Tab instead steps the selection through every
+        object under the mouse pointer, top to bottom, wrapping around
+        (Shift+Tab goes bottom to top) — Rich's way to reach an object
+        buried under others. Tab is kept on the canvas even when nothing
+        is under the pointer, so it never jumps focus away unexpectedly.
+        With nothing selected, Tab moves focus as usual; in the properties
+        panel it's untouched, since this only runs while the canvas has
+        focus."""
+        scene = self.scene()
+        if scene is None or not scene.selectedItems():
+            return super().focusNextPrevChild(next)
+        self._cycle_selection_under_pointer(scene, forward=next)
+        return True
+
+    def _cycle_selection_under_pointer(self, scene: QGraphicsScene, forward: bool) -> None:
+        if self._pointer_pos is None:
+            return
+        point = self.mapToScene(self._pointer_pos)
+        stack = [i for i in scene.items(point) if isinstance(i, EditableItem) and i.isVisible()]  # topmost first
+        if not stack:
+            return
+        current = scene.selectedItems()[0]
+        if current in stack:
+            target = stack[(stack.index(current) + (1 if forward else -1)) % len(stack)]
+        else:
+            target = stack[0] if forward else stack[-1]
+        scene.clearSelection()
+        target.setSelected(True)
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Space:
@@ -789,6 +885,8 @@ class PropertiesPanel(QWidget):
         self.rotation_spin.setValue(obj.transform.rotation)
         self.scale_spin.setValue(obj.transform.scale)
         self.material_combo.setCurrentIndex(self.material_combo.findData(obj.material or ""))
+        # Annotations and keepouts carry no material; there's nothing to pick.
+        self.material_combo.setEnabled(obj.material is not None)
 
         self.set_relation_targets(all_object_ids, exclude=obj.id)
         relation = obj.relation

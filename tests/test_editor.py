@@ -365,7 +365,11 @@ def test_material_items_are_editable_when_doc_given(qtbot):
     assert item.scene_object is doc.get("a")
 
 
-def test_annotations_are_never_editable_even_with_doc(qtbot):
+def test_annotations_are_editable_along_their_outline_only(qtbot):
+    """Annotations used to be deliberately non-editable; Rich needs to
+    select and move them (the ground-cover box, the firepit keepout), so
+    with a `doc` they're `EditableItem`s now — but only the outline is
+    clickable, never the empty interior."""
     from landscape.schema import SceneDocument, SceneObject
     from landscape.schema import Rect as RectPrimitive
 
@@ -378,7 +382,12 @@ def test_annotations_are_never_editable_even_with_doc(qtbot):
     scene = ResolvedScene(objects=[_obj("m", box(0, 0, 2, 2), annotation=True)])
     gscene = build_graphics_scene(scene, _tiny_library(), page_height=10, doc=doc, show_annotations=True)
     item = [i for i in gscene.items() if isinstance(i, QGraphicsPathItem)][0]
-    assert not isinstance(item, EditableItem)
+    assert isinstance(item, EditableItem)
+    # Qt y-down: the 2x2 box spans y 8..10 in scene coords
+    assert item.shape().contains(QPointF(0, 9))  # on the west edge
+    assert not item.shape().contains(QPointF(1, 9))  # the empty middle
+    # the whole hit band, including the part just outside the line, is hit-testable
+    assert item.boundingRect().contains(item.shape().boundingRect())
 
 
 def test_dragging_an_item_updates_the_document_transform(qtbot):
@@ -1699,3 +1708,165 @@ def test_second_rotate_gesture_continues_from_the_first_without_snapping(qtbot):
     rotate_handle.setPos(rotate_handle.pos() + QPointF(0.01, 0))
     assert _max_vertex_mismatch(_fill_vertices(shed), after_first) < 0.05
     rotate_handle.end_drag()
+
+
+# --- selecting dashed annotation / keepout objects -------------------------
+
+
+def _open_backyard_editor(qtbot) -> EditorWindow:
+    """The real design, with annotations shown — `firepit_keepout` and the
+    `fence_enclosure` ground-cover box only exist in `backyard.yaml`,
+    not the `example.yaml` fixture `_open_editor` loads."""
+    window = EditorWindow(materials_path=DEFAULT_MATERIALS)
+    qtbot.addWidget(window)
+    window.load_scene(_scene_copy(BACKYARD_SCENE), show_annotations=True)
+    return window
+
+
+def _click_scene_point(window: EditorWindow, x_ft: float, y_ft: float) -> None:
+    """A real mouse click at a scene point given in the document's own
+    feet (+y north), converted to Qt's y-down scene coordinates and then
+    to viewport pixels."""
+    page_height = window.session.doc.page_height
+    view = window._view
+    pixel = view.mapFromScene(QPointF(x_ft, page_height - y_ft))
+    QTest.mouseClick(view.viewport(), Qt.LeftButton, pos=pixel)
+
+
+@pytest.mark.parametrize(
+    "object_id, outline_point",
+    [
+        # the keepout circle's westernmost point: c=(8.588, 4.965), r=6.0
+        ("firepit_keepout", (2.588, 4.965)),
+        # the ground-cover box's west edge, midway up — clear of the deck
+        # and pad, which both start further east
+        ("fence_enclosure", (4.991, 15.977)),
+    ],
+)
+def test_clicking_a_dashed_objects_outline_selects_it(qtbot, object_id, outline_point):
+    """Rich: "I am unable to select the firepit keepout," nor the dashed
+    box around the deck and hot tub (`fence_enclosure`, marking an
+    optional ground cover). Both are drawn by `_add_annotation_item` as
+    plain, non-selectable `QGraphicsPathItem`s rather than `EditableItem`s.
+    A real click on the dashed outline must select the object."""
+    window = _open_backyard_editor(qtbot)
+
+    _click_scene_point(window, *outline_point)
+
+    assert window._selected_id == object_id
+
+
+def test_clicking_inside_the_ground_cover_box_still_selects_the_hot_tub(qtbot):
+    """Guard for whatever fix makes the dashed objects selectable: they're
+    unfilled outlines drawn *over* other objects, so their interior must
+    not start stealing clicks from what's inside them."""
+    window = _open_backyard_editor(qtbot)
+
+    _click_scene_point(window, 11.966, 16.5)  # the hot tub's center: (8.466, 13.0) + 7x7 / 2
+
+    assert window._selected_id == "hot_tub"
+
+
+def test_dragging_the_keepout_outline_moves_it(qtbot):
+    """Selectable isn't much use if it can't then be moved — the keepout's
+    position is itself an open design question (recentre it on the
+    firepit?), so it has to be draggable like any other object."""
+    window = _open_backyard_editor(qtbot)
+    page_height = window.session.doc.page_height
+    start = QPointF(2.588, page_height - 4.965)  # on the keepout's west edge
+
+    _mouse_drag(window._view, start, start + QPointF(1.0, 0), steps=5)
+
+    t = window.session.doc.get("firepit_keepout").transform
+    # clicks land on whole viewport pixels (~0.05 ft each at this zoom), so allow a couple
+    assert t.tx == pytest.approx(1.0, abs=0.1)
+    assert t.ty == pytest.approx(0.0, abs=0.1)
+    assert window.session.doc.get("site_circle").transform.tx == 0  # the object underneath stayed put
+
+
+# --- Tab cycles through the objects under the mouse pointer ---------------
+
+
+def _shown_backyard_editor(qtbot) -> EditorWindow:
+    """Shown and active, so keyboard focus moves between widgets for real."""
+    window = _open_backyard_editor(qtbot)
+    window.show()
+    qtbot.waitExposed(window)
+    window.activateWindow()
+    qtbot.waitUntil(lambda: QApplication.activeWindow() is window)
+    return window
+
+
+def _tab_on_canvas(window: EditorWindow, backwards: bool = False) -> None:
+    QTest.keyClick(window._view, Qt.Key_Backtab if backwards else Qt.Key_Tab)
+
+
+def test_tab_on_the_canvas_cycles_through_every_object_under_the_pointer(qtbot):
+    """Rich: layered objects are hard to reach by clicking alone, so with
+    an object selected on the canvas, Tab steps the selection through
+    every object under the mouse pointer, top to bottom, then wraps.
+    Under the hot tub's centre: hot_tub (z 3), hot_tub_pad (z 2),
+    site_circle (z 1)."""
+    window = _shown_backyard_editor(qtbot)
+    _click_scene_point(window, 11.966, 16.5)
+    assert window._selected_id == "hot_tub"
+
+    visited = []
+    for _ in range(3):
+        _tab_on_canvas(window)
+        visited.append(window._selected_id)
+
+    assert visited == ["hot_tub_pad", "site_circle", "hot_tub"]
+    assert window._view.hasFocus()  # Tab stayed on the canvas, not moved to the panel
+
+
+def test_shift_tab_on_the_canvas_cycles_the_other_way(qtbot):
+    window = _shown_backyard_editor(qtbot)
+    _click_scene_point(window, 11.966, 16.5)
+
+    _tab_on_canvas(window, backwards=True)
+
+    assert window._selected_id == "site_circle"
+
+
+def test_tab_uses_the_pointers_current_position_not_the_last_click(qtbot):
+    """"Under the mouse pointer" means where the pointer is *now*: select
+    something, move the pointer elsewhere without clicking, then Tab."""
+    window = _shown_backyard_editor(qtbot)
+    _click_scene_point(window, 11.966, 16.5)  # selects hot_tub
+    page_height = window.session.doc.page_height
+    firepit = window._view.mapFromScene(QPointF(8.812, page_height - 5.725))
+    QTest.mouseMove(window._view.viewport(), pos=firepit)
+
+    _tab_on_canvas(window)
+
+    # hot_tub isn't under the pointer any more, so the cycle starts at the top: firepit
+    assert window._selected_id == "firepit"
+    _tab_on_canvas(window)
+    assert window._selected_id == "site_circle"
+
+
+def test_tab_reaches_a_dashed_outline_and_the_object_beneath_it(qtbot):
+    window = _shown_backyard_editor(qtbot)
+    _click_scene_point(window, 2.588, 4.965)  # the keepout's west edge
+    assert window._selected_id == "firepit_keepout"
+
+    _tab_on_canvas(window)
+
+    assert window._selected_id == "site_circle"
+
+
+def test_tab_in_the_properties_panel_still_moves_between_controls(qtbot):
+    """Only the canvas repurposes Tab: once focus is in the right-hand
+    panel, Tab moves between its controls as usual and leaves the
+    selection alone."""
+    window = _shown_backyard_editor(qtbot)
+    _click_scene_point(window, 11.966, 16.5)
+    window._panel.rotation_spin.setFocus()
+    assert window._panel.rotation_spin.hasFocus()
+
+    QTest.keyClick(QApplication.focusWidget(), Qt.Key_Tab)
+
+    assert not window._panel.rotation_spin.hasFocus()
+    assert window._panel.isAncestorOf(QApplication.focusWidget())
+    assert window._selected_id == "hot_tub"
