@@ -1,3 +1,8 @@
+# FROZEN TEST FIXTURE — do not edit. A snapshot of scenes/backyard.yaml as
+# converted from extraction/objects.json (commit cdec3fc), before any design
+# changes. Tests that check the documented design flaws in
+# extraction/objects.md load this, so the live scenes/backyard.yaml can evolve
+# without breaking them.
 # The real backyard concept, converted from extraction/objects.json
 # (itself extracted from backyard concept.pdf) into the M2 scene schema.
 # This is the M1 task "Convert objects.json into the first real scene
@@ -200,11 +205,6 @@ objects:
     shape: {type: circle, cx: 8.588, cy: 4.965, r: 6.0}
     layer: annotation
     z: 18
-    transform:
-      tx: 0.1974597764818533
-      ty: 0.789839105927415
-      rotation: 0.0
-      scale: 0.789072652034135
 
   - id: firepit
     type: ellipse

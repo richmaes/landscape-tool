@@ -28,7 +28,9 @@ from landscape.materials import Material, MaterialLibrary
 from landscape.rules import Violation
 
 EXAMPLE_SCENE = Path(__file__).parent.parent / "scenes" / "example.yaml"
-BACKYARD_SCENE = Path(__file__).parent.parent / "scenes" / "backyard.yaml"
+# The frozen original design (see the fixture's header), not the live
+# scenes/backyard.yaml, which changes as Rich edits the design.
+BACKYARD_SCENE = Path(__file__).parent / "fixtures" / "backyard_original.yaml"
 BACKYARD_RULES = Path(__file__).parent.parent / "rules" / "backyard.yaml"
 DEFAULT_MATERIALS = Path(__file__).parent.parent / "assets" / "materials.yaml"
 

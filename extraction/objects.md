@@ -18,7 +18,9 @@ Scale derived from the `< 2' >` badge, which is exactly 72.0 pt wide, and
 confirmed independently by every major dimension landing on a round number
 (7 ft tub, 9 ft pad, 20 ft fence, 24 ft circle).
 
-**The page is a crop, not the site.** The paver field and yard continue
+> **Later design changes.** This file records the concept PDF as extracted, and the findings below are about *that* drawing. The live design in `scenes/backyard.yaml` has moved on where noted ("Resolved"); the original is kept frozen as `tests/fixtures/backyard_original.yaml`.
+
+**The page is a crop, not the site. The paver field and yard continue
 significantly beyond it.
 
 ## The design, in words
@@ -84,13 +86,13 @@ proposed = to be built; n/a = annotation.
 
 **fence_gap** — The existing vinyl fence (y=24.0) and the north face of the new fence (y=21.739) are parallel and only 2.26 ft apart, leaving a narrow dead strip between them. Verify this is intended and not an artefact of the concept sketch.
 
-**keepout_escapes_burnable_area** — The keep-out circle is not contained by the 24 ft circle: centres are 7.819 ft apart, so it overhangs the boundary by 1.819 ft to the south-west, out onto the pavers. Harmless if pavers are non-burnable, but the keep-out is not doing its job at the edge.
+**keepout_escapes_burnable_area** — The keep-out circle is not contained by the 24 ft circle: centres are 7.819 ft apart, so it overhangs the boundary by 1.819 ft to the south-west, out onto the pavers. Harmless if pavers are non-burnable, but the keep-out is not doing its job at the edge. **Resolved 2026-09-24:** the recentred ~4.73 ft keep-out sits wholly inside the circle.
 
-**keepout_not_centred_on_firepit** — The firepit sits 0.792 ft off the keep-out centre, so real clearance ranges from 5.21 ft to 6.79 ft depending on direction. If the 6 ft radius is a safety figure, the zone should be recentred on the firepit.
+**keepout_not_centred_on_firepit** — The firepit sits 0.792 ft off the keep-out centre, so real clearance ranges from 5.21 ft to 6.79 ft depending on direction. If the 6 ft radius is a safety figure, the zone should be recentred on the firepit. **Resolved 2026-09-24:** recentred (0.04 ft off) and deliberately reduced to ~4.73 ft radius — about 3.7–3.8 ft clearance from the firepit's edge.
 
-**deck_intrudes_on_keepout** — Nearest deck element (deck_s) is 5.915 ft from the firepit centre - inside the 6.0 ft keep-out radius by 0.085 ft. The deck is wood. This is the one clearance conflict in the plan that actually matters. *Clarified later (see `TODO.md`, M1):* that 0.085 ft is measured from the firepit's own centre — i.e. it only applies once the keep-out is recentred on the firepit (see keepout_not_centred_on_firepit). Against the keep-out circle as actually drawn, deck_s clears it by 0.675 ft.
+**deck_intrudes_on_keepout** — Nearest deck element (deck_s) is 5.915 ft from the firepit centre - inside the 6.0 ft keep-out radius by 0.085 ft. The deck is wood. This is the one clearance conflict in the plan that actually matters. *Clarified later (see `TODO.md`, M1):* that 0.085 ft is measured from the firepit's own centre — i.e. it only applies once the keep-out is recentred on the firepit (see keepout_not_centred_on_firepit). Against the keep-out circle as actually drawn, deck_s clears it by 0.675 ft. **Resolved 2026-09-24:** with the recentred ~4.73 ft keep-out, deck_s clears it by 1.151 ft.
 
-**firepit_move_to_contain_keepout** — Firepit is 7.038 ft from the centre of the 24 ft circle. For a 6 ft keep-out recentred on it to sit wholly inside, it must be within 6.0 ft - i.e. move it about 1.038 ft toward the centre.
+**firepit_move_to_contain_keepout** — Firepit is 7.038 ft from the centre of the 24 ft circle. For a 6 ft keep-out recentred on it to sit wholly inside, it must be within 6.0 ft - i.e. move it about 1.038 ft toward the centre. **Moot as of 2026-09-24:** the keep-out was shrunk instead, so it fits without moving the firepit.
 
 ## Open items
 
@@ -104,4 +106,5 @@ proposed = to be built; n/a = annotation.
 - Is page-up north?
 - Full site extent, house position, and what else is in the yard.
 - Mechanical bay side: east or west, not yet chosen.
-- Resolve: if the keep-out is recentred on the firepit at its full 6 ft radius, deck_s sits 0.085 ft inside it (as drawn today it clears by 0.675 ft). The two decisions go together.
+- ~~Resolve: deck_s vs. the firepit keep-out~~ — resolved 2026-09-24: keep-out recentred on the firepit at ~4.73 ft radius; deck_s clears it by 1.151 ft.
+- Lock the keep-out to the firepit with a `center_of` relation, so it follows if the firepit moves? (Currently positioned by a transform only.)

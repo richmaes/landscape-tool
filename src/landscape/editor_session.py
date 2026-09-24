@@ -16,6 +16,8 @@ import copy
 from pathlib import Path
 from typing import Any, Callable
 
+from ruamel.yaml.comments import CommentedMap
+
 from .geometry import ResolvedScene, resolve_scene
 from .materials import MaterialLibrary, load_materials
 from .rules import Violation, load_rules, run_rules
@@ -53,6 +55,46 @@ _DEFAULT_PRIMITIVE_KWARGS: dict[str, Any] = {
 
 CREATABLE_PRIMITIVE_KINDS: list[str] = list(_DEFAULT_PRIMITIVE_KWARGS)
 
+
+
+def _pop_trailing_comment(node: CommentedMap) -> list | None:
+    """Detach the comment that follows a mapping's last value — where
+    ruamel keeps the blank line separating one object from the next. For
+    a block-style nested mapping it sits on *that* mapping's last key, so
+    recurse into it."""
+    if not node:
+        return None
+    last_key = list(node.keys())[-1]
+    entry = node.ca.items.get(last_key)
+    if entry and len(entry) > 2 and entry[2] is not None:
+        comment, entry[2] = entry[2], None
+        return comment
+    value = node[last_key]
+    if isinstance(value, CommentedMap) and not value.fa.flow_style():
+        return _pop_trailing_comment(value)
+    return None
+
+
+def _attach_trailing_comment(node: CommentedMap, comment: list | None) -> None:
+    if comment is None or not node:
+        return
+    last_key = list(node.keys())[-1]
+    value = node[last_key]
+    if isinstance(value, CommentedMap) and value and not value.fa.flow_style():
+        _attach_trailing_comment(value, comment)
+        return
+    node.ca.items.setdefault(last_key, [None, None, None, None])[2] = comment
+
+
+def _set_keeping_trailing_gap(node: CommentedMap, key: str, value: Any) -> None:
+    """`node[key] = value`, but the blank line after the object stays after
+    the object. A plain assignment gets this wrong two ways: a *new* key
+    is appended after the last key's trailing comment (so the gap lands
+    above it), and *replacing* a nested mapping that was last throws away
+    the comment it carried."""
+    comment = _pop_trailing_comment(node)
+    node[key] = value
+    _attach_trailing_comment(node, comment)
 
 class EditorSession:
     def __init__(self, materials_path: str | Path = "assets/materials.yaml", rules_path: str | Path | None = None):
@@ -159,10 +201,12 @@ class EditorSession:
             return
         obj = self.doc.get(object_id)
         if obj.material is not None:
-            raw_obj["material"] = obj.material
+            _set_keeping_trailing_gap(raw_obj, "material", obj.material)
         t = obj.transform
         if t.tx or t.ty or t.rotation or t.scale != 1.0:
-            raw_obj["transform"] = {"tx": t.tx, "ty": t.ty, "rotation": t.rotation, "scale": t.scale}
+            _set_keeping_trailing_gap(
+                raw_obj, "transform", CommentedMap(tx=t.tx, ty=t.ty, rotation=t.rotation, scale=t.scale)
+            )
 
     def set_rotation(self, object_id: str, value: float) -> None:
         self.push_undo()

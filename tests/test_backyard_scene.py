@@ -1,7 +1,13 @@
 """Regression tests for the real backyard scene (M1's leftover item):
-scenes/backyard.yaml, converted from extraction/objects.json, and
+the design as converted from extraction/objects.json, and
 rules/backyard.yaml, which is expected to reproduce the real design
-flaws Rich already documented by hand in extraction/objects.md."""
+flaws Rich already documented by hand in extraction/objects.md.
+
+Those checks run against a frozen copy, tests/fixtures/backyard_original.yaml:
+the live scenes/backyard.yaml is Rich's working design and is meant to
+change (on 2026-09-24 he recentred and shrank the firepit keepout, fixing
+several of the very flaws these tests pin down). The live file only gets
+the design-independent checks at the bottom of this module."""
 
 from pathlib import Path
 
@@ -12,7 +18,10 @@ from landscape.materials import color_distance, load_materials
 from landscape.rules import load_rules, run_rules
 from landscape.scene_io import load_scene
 
-BACKYARD_SCENE = Path(__file__).parent.parent / "scenes" / "backyard.yaml"
+# The frozen original design (see the fixture's header), not the live
+# scenes/backyard.yaml, which changes as Rich edits the design.
+BACKYARD_SCENE = Path(__file__).parent / "fixtures" / "backyard_original.yaml"
+LIVE_BACKYARD_SCENE = Path(__file__).parent.parent / "scenes" / "backyard.yaml"
 BACKYARD_RULES = Path(__file__).parent.parent / "rules" / "backyard.yaml"
 DEFAULT_MATERIALS = Path(__file__).parent.parent / "assets" / "materials.yaml"
 
@@ -86,3 +95,16 @@ def test_sand_placeholder_and_fence_colors_are_borderline_close():
     lib = load_materials(DEFAULT_MATERIALS)
     distance = color_distance(lib.resolve("fence").color, lib.resolve("sand_tbd").color)
     assert distance == pytest.approx(0.124, abs=0.001)
+
+
+# --- the live, editable design ----------------------------------------------
+# Deliberately design-independent: these must keep passing whatever Rich
+# changes in the editor. Specific geometry belongs in the frozen fixture.
+
+
+def test_live_backyard_scene_loads_resolves_and_runs_rules():
+    doc = load_scene(LIVE_BACKYARD_SCENE)
+    scene = resolve_scene(doc)
+    assert {o.id for o in scene.objects} == {o.id for o in doc.objects}
+    assert all(not o.geometry.is_empty for o in scene.objects)
+    run_rules(scene, load_rules(BACKYARD_RULES))  # must not raise; results are the design's business

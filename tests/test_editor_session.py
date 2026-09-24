@@ -13,7 +13,9 @@ from landscape.editor_session import EditorSession
 from landscape.geometry import resolve_scene
 
 EXAMPLE_SCENE = Path(__file__).parent.parent / "scenes" / "example.yaml"
-BACKYARD_SCENE = Path(__file__).parent.parent / "scenes" / "backyard.yaml"
+# The frozen original design (see the fixture's header), not the live
+# scenes/backyard.yaml, which changes as Rich edits the design.
+BACKYARD_SCENE = Path(__file__).parent / "fixtures" / "backyard_original.yaml"
 BACKYARD_RULES = Path(__file__).parent.parent / "rules" / "backyard.yaml"
 DEFAULT_MATERIALS = Path(__file__).parent.parent / "assets" / "materials.yaml"
 
@@ -623,3 +625,53 @@ def test_set_relation_saves_and_reloads_correctly(tmp_path):
 
     reloaded = parse_saved(scene_copy)
     assert reloaded.get("deck_west").relation == CenterOf(ref="firepit")
+
+
+# --- saved YAML keeps the blank line between objects ------------------------
+
+
+def _block_after(text: str, object_id: str) -> str:
+    """The saved text from `- id: <object_id>` up to (not including) the
+    next object's `- id:` line."""
+    start = text.index(f"- id: {object_id}\n")
+    end = text.index("  - id:", start + 1)
+    return text[start:end]
+
+
+def test_adding_a_transform_keeps_the_blank_line_after_the_object(tmp_path):
+    """A real formatting bug found in Rich's own saved backyard.yaml: ruamel
+    keeps the blank line between objects as a comment on the object's
+    *last* key, so appending a new `transform:` key put it *after* that
+    blank line — the gap ended up above `transform:` instead of below it."""
+    scene = tmp_path / "backyard.yaml"
+    scene.write_text(BACKYARD_SCENE.read_text())
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(scene)
+
+    session.set_scale("firepit_keepout", 0.8)
+    session.save()
+
+    block = _block_after(scene.read_text(), "firepit_keepout")
+    assert "    z: 18\n    transform:\n" in block  # no gap inside the object
+    assert block.endswith("\n\n")  # exactly one blank line before the next object
+    assert not block.endswith("\n\n\n")
+
+
+def test_rewriting_an_existing_transform_keeps_the_blank_line(tmp_path):
+    """Once `transform:` is the last key, the blank line lives on *its*
+    last nested key — replacing the whole transform mapping on the next
+    edit must not drop it."""
+    scene = tmp_path / "backyard.yaml"
+    scene.write_text(BACKYARD_SCENE.read_text())
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(scene)
+    session.set_scale("firepit_keepout", 0.8)
+    session.save()
+
+    session.load(scene)
+    session.set_rotation("firepit_keepout", 15)
+    session.save()
+
+    block = _block_after(scene.read_text(), "firepit_keepout")
+    assert "rotation: 15" in block
+    assert block.endswith("\n\n") and not block.endswith("\n\n\n")
