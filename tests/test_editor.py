@@ -33,6 +33,23 @@ BACKYARD_RULES = Path(__file__).parent.parent / "rules" / "backyard.yaml"
 DEFAULT_MATERIALS = Path(__file__).parent.parent / "assets" / "materials.yaml"
 
 
+
+@pytest.fixture(autouse=True)
+def _answer_close_prompts_with_discard():
+    """Closing an EditorWindow with unsaved changes now asks Save/Discard/
+    Cancel via a modal QMessageBox.question — and pytest-qt closes every
+    registered window at teardown, so any test that leaves edits unsaved
+    would block forever on a dialog nobody answers (a real hang, found
+    the first time this ran). Autouse, so it's set up before `qtbot` and
+    torn down after it: still in effect during qtbot's window cleanup.
+    Tests that check the prompt itself override it with `monkeypatch`."""
+    from unittest.mock import patch
+
+    from PySide6.QtWidgets import QMessageBox
+
+    with patch.object(QMessageBox, "question", return_value=QMessageBox.Discard):
+        yield
+
 def _obj(id, geom, material=None, z=0, annotation=False, rule=None):
     return ResolvedObject(id=id, geometry=geom, material=material, layer="default", z=z, annotation=annotation, rule=rule)
 
@@ -1353,12 +1370,15 @@ def test_save_action_writes_the_file(qtbot, tmp_path, monkeypatch):
     window = _open_editor(qtbot)
     out = tmp_path / "via_menu.yaml"
     monkeypatch.setattr(window.session, "scene_path", out)
-
     save_action = next(a for a in window.menuBar().actions()[0].menu().actions() if a.text() == "&Save")
+    assert not save_action.isEnabled()  # nothing to save yet (greyed out by design)
+
+    _select_only(window, "shed")
+    window._panel.rotation_spin.setValue(33)
     save_action.trigger()
 
     assert out.exists()
-    assert out.read_text() == EXAMPLE_SCENE.read_text()
+    assert "rotation: 33" in out.read_text()
 
 
 def test_export_action_writes_a_rendered_file(qtbot, tmp_path, monkeypatch):
@@ -1870,3 +1890,138 @@ def test_tab_in_the_properties_panel_still_moves_between_controls(qtbot):
     assert not window._panel.rotation_spin.hasFocus()
     assert window._panel.isAncestorOf(QApplication.focusWidget())
     assert window._selected_id == "hot_tub"
+
+
+# --- Save button, unsaved-changes indicator, close prompt ------------------
+
+
+def _toolbar_save_button(window: EditorWindow):
+    from PySide6.QtWidgets import QToolBar
+
+    toolbar = window.findChild(QToolBar)
+    assert toolbar is not None
+    return toolbar.widgetForAction(window._save_action)
+
+
+def _indicator_shows_unsaved(window: EditorWindow) -> bool:
+    """All three cues must agree: the toolbar label, the window title's
+    modified marker, and the Save button being enabled. The window has to
+    be shown and pending events processed first: a toolbar only lays out
+    (and shows/hides its widgets to match their actions) once it's on
+    screen, and does so on the next event-loop pass, not synchronously."""
+    window.show()
+    QApplication.processEvents()
+    shown = {
+        window._unsaved_label.isVisibleTo(window),
+        window.isWindowModified(),
+        window._save_action.isEnabled(),
+    }
+    assert len(shown) == 1, "unsaved indicators disagree"
+    return shown.pop()
+
+
+def test_toolbar_has_a_save_button_that_saves_to_yaml(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    window._panel.rotation_spin.setValue(33)
+    assert _indicator_shows_unsaved(window)
+
+    QTest.mouseClick(_toolbar_save_button(window), Qt.LeftButton)
+
+    assert "rotation: 33" in window.session.scene_path.read_text()
+    assert not _indicator_shows_unsaved(window)
+
+
+def test_indicator_is_clear_right_after_loading(qtbot):
+    window = _open_editor(qtbot)
+    assert not _indicator_shows_unsaved(window)
+
+
+def test_indicator_turns_on_after_a_plain_drag(qtbot):
+    """A move-drag deliberately never rebuilds the scene, so the
+    indicator can't rely on rebuilds to notice it — a real mouse drag."""
+    window = _open_editor(qtbot)
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    start = shed.path().boundingRect().center()
+
+    _mouse_drag(window._view, start, start + QPointF(1.0, 0), steps=3)
+
+    assert _indicator_shows_unsaved(window)
+
+
+def test_indicator_clears_when_undoing_back_to_the_saved_state(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    window._panel.rotation_spin.setValue(33)
+    assert _indicator_shows_unsaved(window)
+
+    window._on_undo()
+
+    assert not _indicator_shows_unsaved(window)
+
+
+def test_window_title_names_the_file_with_a_modified_marker(qtbot):
+    window = _open_editor(qtbot)
+    assert window.windowTitle() == "Landscape Editor — example.yaml[*]"  # Qt shows '*' only while modified
+
+
+def test_closing_with_unsaved_changes_can_be_cancelled(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    window = _open_editor(qtbot)
+    window.show()
+    _select_only(window, "shed")
+    window._panel.rotation_spin.setValue(33)
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a) or QMessageBox.Cancel)
+
+    window.close()
+
+    assert asked
+    assert window.isVisible()
+    assert _indicator_shows_unsaved(window)
+
+
+def test_closing_with_unsaved_changes_can_save_first(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    window = _open_editor(qtbot)
+    window.show()
+    _select_only(window, "shed")
+    window._panel.rotation_spin.setValue(33)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Save)
+
+    window.close()
+
+    assert not window.isVisible()
+    assert "rotation: 33" in window.session.scene_path.read_text()
+
+
+def test_closing_with_unsaved_changes_can_discard_them(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    window = _open_editor(qtbot)
+    window.show()
+    original = window.session.scene_path.read_text()
+    _select_only(window, "shed")
+    window._panel.rotation_spin.setValue(33)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Discard)
+
+    window.close()
+
+    assert not window.isVisible()
+    assert window.session.scene_path.read_text() == original
+
+
+def test_closing_with_nothing_unsaved_does_not_ask(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    window = _open_editor(qtbot)
+    window.show()
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a) or QMessageBox.Cancel)
+
+    window.close()
+
+    assert asked == []
+    assert not window.isVisible()

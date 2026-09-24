@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .geometry import ResolvedScene, resolve_scene
 from .materials import MaterialLibrary, load_materials
@@ -64,9 +64,30 @@ class EditorSession:
         self.scene_path: Path | None = None
         self.resolved: ResolvedScene | None = None
         self.violations: list[Violation] = []
-        self._undo_stack: list[tuple[SceneDocument, Any]] = []
-        self._redo_stack: list[tuple[SceneDocument, Any]] = []
-        self.dirty: bool = False  # True once anything has been edited since load()/save()
+        # Each entry is (doc, raw, state_id) — see `dirty`.
+        self._undo_stack: list[tuple[SceneDocument, Any, int]] = []
+        self._redo_stack: list[tuple[SceneDocument, Any, int]] = []
+        self._state_id = 0
+        self._saved_state_id = 0
+        self._next_state_id = 1
+        # Called (no arguments) whenever `dirty` may have changed — load,
+        # any edit's push_undo(), undo, redo, save. Plain callable, so this
+        # module stays free of Qt; the editor window hangs its unsaved
+        # indicator off it.
+        self.on_state_change: Callable[[], None] | None = None
+
+    @property
+    def dirty(self) -> bool:
+        """True when the document differs from what was last loaded or
+        saved. Every edit gets a fresh, never-reused state id, and undo/
+        redo carry those ids with their snapshots — so undoing back to
+        the saved state reads as clean again, while a *new* edit made
+        after undoing never gets mistaken for the saved state."""
+        return self._state_id != self._saved_state_id
+
+    def _notify_state_change(self) -> None:
+        if self.on_state_change:
+            self.on_state_change()
 
     def load(self, scene_path: str | Path) -> None:
         self.scene_path = Path(scene_path)
@@ -75,8 +96,10 @@ class EditorSession:
         self.doc = parse_scene(self.raw)
         self._undo_stack = []
         self._redo_stack = []
-        self.dirty = False
+        self._state_id = self._saved_state_id = 0
+        self._next_state_id = 1
         self.recompute()
+        self._notify_state_change()
 
     def push_undo(self) -> None:
         """Snapshot the current doc+raw before a mutation, so `undo()` can
@@ -85,11 +108,13 @@ class EditorSession:
         `doc` (plain dataclasses) and `raw` (a ruamel round-trip tree)
         both deepcopy safely and independently — verified directly rather
         than assumed, since ruamel's CommentedMap isn't a plain dict."""
-        self._undo_stack.append((copy.deepcopy(self.doc), copy.deepcopy(self.raw)))
+        self._undo_stack.append((copy.deepcopy(self.doc), copy.deepcopy(self.raw), self._state_id))
         if len(self._undo_stack) > _MAX_UNDO_DEPTH:
             self._undo_stack.pop(0)
         self._redo_stack = []
-        self.dirty = True
+        self._state_id = self._next_state_id
+        self._next_state_id += 1
+        self._notify_state_change()
 
     @property
     def can_undo(self) -> bool:
@@ -102,18 +127,20 @@ class EditorSession:
     def undo(self) -> None:
         if not self._undo_stack:
             return
-        self._redo_stack.append((self.doc, self.raw))
-        self.doc, self.raw = self._undo_stack.pop()
+        self._redo_stack.append((self.doc, self.raw, self._state_id))
+        self.doc, self.raw, self._state_id = self._undo_stack.pop()
         self.raw_objects = {node["id"]: node for node in (self.raw.get("objects") or [])}
         self.recompute()
+        self._notify_state_change()
 
     def redo(self) -> None:
         if not self._redo_stack:
             return
-        self._undo_stack.append((self.doc, self.raw))
-        self.doc, self.raw = self._redo_stack.pop()
+        self._undo_stack.append((self.doc, self.raw, self._state_id))
+        self.doc, self.raw, self._state_id = self._redo_stack.pop()
         self.raw_objects = {node["id"]: node for node in (self.raw.get("objects") or [])}
         self.recompute()
+        self._notify_state_change()
 
     def recompute(self) -> None:
         """Re-resolve geometry and re-run the rule checker. Called after
@@ -192,9 +219,10 @@ class EditorSession:
         try:
             self.doc.resolution_order = validate_and_order(self.doc)
         except SchemaError:
-            self.doc, self.raw = self._undo_stack.pop()
+            self.doc, self.raw, self._state_id = self._undo_stack.pop()
             self.raw_objects = {node["id"]: node for node in (self.raw.get("objects") or [])}
             self.recompute()
+            self._notify_state_change()  # a rejected edit leaves nothing unsaved
             raise
 
         self.recompute()
@@ -239,9 +267,16 @@ class EditorSession:
         return f"{kind}_{n}"
 
     def save(self, path: str | Path | None = None) -> None:
+        """Write the document to `path`, or back to the file it came from.
+        Saving to a new path ("Save As") makes that the file being edited
+        from here on, so the next plain save — and what "saved" means —
+        refer to it."""
         dump_raw(self.raw, path or self.scene_path)
-        self._discard_autosave()
-        self.dirty = False
+        self._discard_autosave()  # the old path's sidecar, if the path is changing
+        if path is not None:
+            self.scene_path = Path(path)
+        self._saved_state_id = self._state_id
+        self._notify_state_change()
 
     @property
     def autosave_path(self) -> Path | None:

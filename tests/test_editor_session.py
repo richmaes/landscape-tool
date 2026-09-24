@@ -223,16 +223,93 @@ def test_not_dirty_after_save(tmp_path):
     assert not session.dirty
 
 
-def test_still_dirty_after_undo_to_original_state():
-    """Conservative by design: once anything has been edited, dirty stays
-    True until an explicit save, even if undo happens to land back on
-    the original values — matching this project's warn-don't-silently-
-    discard stance rather than trying to detect true equivalence."""
+def test_not_dirty_after_undoing_back_to_the_saved_state():
+    """Rich's call (2026-09-24): undoing every change since the last save
+    means there's nothing unsaved, so the indicator should clear. (This
+    used to stay dirty until an explicit save, by design.)"""
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    session.set_rotation("shed", 45)
+    session.set_scale("shed", 2)
+    session.undo()
+    assert session.dirty  # one edit still applied
+    session.undo()
+    assert not session.dirty
+
+
+def test_redo_past_the_saved_state_is_dirty_again():
     session = EditorSession(DEFAULT_MATERIALS)
     session.load(_scene_copy(EXAMPLE_SCENE))
     session.set_rotation("shed", 45)
     session.undo()
+    session.redo()
     assert session.dirty
+
+
+def test_undo_to_before_a_save_is_dirty(tmp_path):
+    """The saved point is wherever save() happened, not the loaded file:
+    undoing an edit that's already been saved leaves the document
+    different from what's on disk."""
+    scene_copy = tmp_path / "copy.yaml"
+    scene_copy.write_text(EXAMPLE_SCENE.read_text())
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(scene_copy)
+    session.set_rotation("shed", 45)
+    session.save()
+
+    session.undo()
+
+    assert session.dirty
+    session.redo()
+    assert not session.dirty
+
+
+def test_a_fresh_edit_after_undoing_to_the_saved_state_is_dirty():
+    """A new edit branches off the saved state; it must never be mistaken
+    for the saved state just because the undo depth happens to match."""
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    session.set_rotation("shed", 45)
+    session.undo()
+    session.set_rotation("shed", 30)
+    assert session.dirty
+
+
+def test_save_as_makes_the_new_file_the_one_being_edited(tmp_path):
+    """Save As switches the working file (standard desktop behaviour), so
+    "saved" and the next plain Save refer to the new file — not a clean
+    indicator for a file you're no longer writing to."""
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(_scene_copy(EXAMPLE_SCENE))
+    session.set_rotation("shed", 45)
+    new_path = tmp_path / "renamed.yaml"
+
+    session.save(new_path)
+
+    assert session.scene_path == new_path
+    assert not session.dirty
+    session.set_rotation("shed", 10)
+    session.save()
+    assert "rotation: 10" in new_path.read_text()
+
+
+def test_on_state_change_fires_whenever_saved_status_can_change(tmp_path):
+    """The GUI's unsaved indicator hangs off this, so it has to fire for
+    every path that can flip `dirty` — including a plain drag, which
+    calls `push_undo()` directly rather than any `set_*()`."""
+    scene_copy = tmp_path / "copy.yaml"
+    scene_copy.write_text(EXAMPLE_SCENE.read_text())
+    session = EditorSession(DEFAULT_MATERIALS)
+    calls = []
+    session.on_state_change = lambda: calls.append(session.dirty)
+
+    session.load(scene_copy)
+    session.push_undo()  # what a drag does at its start
+    session.undo()
+    session.redo()
+    session.save()
+
+    assert calls == [False, True, False, True, False]
 
 
 def test_undo_reverts_a_set_rotation():
@@ -519,6 +596,7 @@ def test_set_relation_rejects_a_cycle_and_rolls_back():
 
     assert session.doc.get("deck_west").relation is None
     assert session.doc.resolution_order == original_order
+    assert not session.dirty  # a rejected edit leaves nothing to save
 
 
 def test_set_relation_is_undoable_on_success():

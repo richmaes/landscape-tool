@@ -932,7 +932,9 @@ class EditorWindow(QMainWindow):
         rules_path: str | Path | None = None,
     ):
         super().__init__()
-        self.setWindowTitle("Landscape Editor")
+        # "[*]" is Qt's placeholder: it shows as "*" only while
+        # setWindowModified(True) — see _update_save_state.
+        self.setWindowTitle("Landscape Editor[*]")
 
         self.session = EditorSession(materials_path, rules_path)
         self._show_annotations = False
@@ -969,6 +971,8 @@ class EditorWindow(QMainWindow):
             f"border: 1px solid {LINE_COLOR.name()}; }}"
             f"QStatusBar {{ color: {LINE_COLOR.name()}; }}"
         )
+        self.session.on_state_change = self._update_save_state
+        self._update_save_state()
 
     def _build_menu(self) -> None:
         from PySide6.QtGui import QKeySequence
@@ -976,16 +980,19 @@ class EditorWindow(QMainWindow):
 
         file_menu = self.menuBar().addMenu("&File")
 
-        save_action = file_menu.addAction("&Save")
-        save_action.setShortcut(QKeySequence.Save)
-        save_action.triggered.connect(lambda: self.save_scene())
+        # One action shared by the menu, Ctrl+S and the toolbar button, so
+        # all three enable/disable together (see _update_save_state).
+        self._save_action = file_menu.addAction("&Save")
+        self._save_action.setShortcut(QKeySequence.Save)
+        self._save_action.setToolTip("Save to the scene's YAML file (Ctrl+S)")
+        self._save_action.triggered.connect(lambda: self._save_or_warn())
 
         save_as_action = file_menu.addAction("Save &As…")
 
         def _save_as() -> None:
             path, _ = QFileDialog.getSaveFileName(self, "Save Scene As", "", "Scene YAML (*.yaml)")
             if path:
-                self.save_scene(path)
+                self._save_or_warn(path)
 
         save_as_action.triggered.connect(_save_as)
 
@@ -1003,6 +1010,15 @@ class EditorWindow(QMainWindow):
         self._redo_action.triggered.connect(self._on_redo)
 
         self._layers_menu = self.menuBar().addMenu("&Layers")
+
+        toolbar = self.addToolBar("File")
+        toolbar.setMovable(False)
+        toolbar.addAction(self._save_action)
+        self._unsaved_label = QLabel("● Unsaved changes")
+        self._unsaved_label.setStyleSheet(f"color: {_VIOLATION_COLOR.name()}; padding-left: 8px;")
+        # A widget in a toolbar is shown/hidden through the QAction that
+        # addWidget() returns, not the widget's own setVisible().
+        self._unsaved_label_action = toolbar.addWidget(self._unsaved_label)
 
         create_menu = self.menuBar().addMenu("&Create")
         for kind in CREATABLE_PRIMITIVE_KINDS:
@@ -1072,12 +1088,62 @@ class EditorWindow(QMainWindow):
         # known, so lines start out at the intended ~3px, not whatever
         # `LINE_WIDTH_PX / 1.0` happened to look like on this scene.
         self._rebuild_scene()
-        self.setWindowTitle(f"Landscape Editor — {Path(scene_path).name}")
         self._watch_scene_file()
+        self._update_save_state()
 
     def save_scene(self, path: str | Path | None = None) -> None:
         self.session.save(path)
-        self._remember_own_write()
+        if path is not None:
+            self._watch_scene_file()  # Save As: the new file is the one being edited now
+        else:
+            self._remember_own_write()
+
+    def _save_or_warn(self, path: str | Path | None = None) -> bool:
+        """`save_scene` for the GUI's own Save/Save As/close-prompt paths:
+        a failed write (permissions, a vanished folder) becomes a warning
+        dialog, not an unhandled exception, and leaves the document
+        marked unsaved. Returns whether the save succeeded."""
+        try:
+            self.save_scene(path)
+        except OSError as exc:
+            from PySide6.QtWidgets import QMessageBox
+
+            QMessageBox.warning(self, "Save failed", f"Couldn't save the scene:\n\n{exc}")
+            return False
+        return True
+
+    def _update_save_state(self) -> None:
+        """Keep every "unsaved changes" cue in step with `session.dirty`:
+        the toolbar label, the "*" in the window title, and the Save
+        button/menu item/Ctrl+S (enabled only when there's something to
+        save). Wired to `EditorSession.on_state_change`, which fires for
+        every edit — including a plain drag, which never rebuilds the
+        scene, so this can't just hang off `_rebuild_scene`."""
+        dirty = self.session.dirty
+        self._save_action.setEnabled(dirty)
+        self._unsaved_label_action.setVisible(dirty)
+        if self.session.scene_path is not None:
+            self.setWindowTitle(f"Landscape Editor — {self.session.scene_path.name}[*]")
+        self.setWindowModified(dirty)
+
+    def closeEvent(self, event) -> None:
+        """Closing with unsaved changes asks Save / Discard / Cancel. On
+        Discard, the `.autosave` sidecar is left in place as a backup."""
+        if self.session.dirty:
+            from PySide6.QtWidgets import QMessageBox
+
+            name = self.session.scene_path.name if self.session.scene_path else "the scene"
+            choice = QMessageBox.question(
+                self,
+                "Unsaved changes",
+                f"Save changes to '{name}' before closing?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save,
+            )
+            if choice == QMessageBox.Cancel or (choice == QMessageBox.Save and not self._save_or_warn()):
+                event.ignore()
+                return
+        super().closeEvent(event)
 
     def _watch_scene_file(self) -> None:
         """(Re)point the file watcher at the just-loaded scene, and
