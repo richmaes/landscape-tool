@@ -214,10 +214,22 @@ class EditableItem(QGraphicsPathItem):
         event.accept()
 
     def mouseReleaseEvent(self, event) -> None:
-        # No super() call — see mousePressEvent's docstring; this handler
-        # fully owns press/move/release now, so there's no base-class
-        # drag state left to hand off to.
-        event.accept()
+        # A real, confirmed bug: mousePressEvent/mouseMoveEvent above
+        # deliberately skip `super()` (see mousePressEvent's docstring),
+        # but click-to-select turns out to live in the *default*
+        # `mouseReleaseEvent`'s own body, not at scene-dispatch/press
+        # time as it's easy to assume — skipping `super()` here too, as
+        # a first pass did, silently broke selecting an object by
+        # clicking it (confirmed: `isSelected()` stayed `False` after a
+        # real `QTest.mouseClick`, and with it, the resize/rotate
+        # handles never appeared, since they're only ever added in
+        # response to a `selectionChanged` signal that now never fired).
+        # Calling `super()` here does NOT reintroduce the "drags the
+        # whole selection" bug that motivated skipping the default
+        # mousePressEvent/mouseMoveEvent in the first place — that bug
+        # lived specifically in the default mouseMoveEvent's body, which
+        # this class still never calls.
+        super().mouseReleaseEvent(event)
         if self._dragging:
             self._dragging = False
             if self._on_drag_end:
