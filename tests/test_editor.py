@@ -1,3 +1,4 @@
+import math
 import os
 import shutil
 import tempfile
@@ -888,7 +889,11 @@ def test_rotate_handle_updates_rotation_and_syncs_panel(qtbot):
     rotate_handle.end_drag()
 
     after = window.session.doc.get("shed").transform.rotation
-    assert after == pytest.approx(before + 90.0, abs=0.5)
+    # top-to-east is clockwise on screen, i.e. -90 in the scene's
+    # counter-clockwise-positive convention (this once asserted +90,
+    # encoding the mirrored-commit bug — see
+    # test_rotate_preview_turns_the_same_direction_as_the_committed_geometry)
+    assert after == pytest.approx(before - 90.0, abs=0.5)
     assert window._panel.rotation_spin.value() == pytest.approx(after, abs=0.5)
 
 
@@ -1584,3 +1589,113 @@ def test_deselecting_clears_the_panel(qtbot):
 
     assert window._selected_id is None
     assert not window._panel.isEnabled()
+
+
+def _fill_vertices(item) -> list[QPointF]:
+    """An item's outline as drawn on screen — its path mapped through
+    whatever Qt-level preview transform (rotation/scale) it carries."""
+    return list(item.mapToScene(item.path().toFillPolygon()))
+
+
+def _max_vertex_mismatch(a: list[QPointF], b: list[QPointF]) -> float:
+    """Worst distance from any vertex in `a` to its nearest vertex in `b`
+    — order-agnostic, since the two outlines may start at different
+    corners."""
+    return max(min(math.hypot(p.x() - q.x(), p.y() - q.y()) for q in b) for p in a)
+
+
+def test_rotate_preview_turns_the_same_direction_as_the_committed_geometry(qtbot):
+    """A real, confirmed bug: the handle's live preview measures its
+    angle in Qt's y-down coordinates (positive = clockwise on screen),
+    but the committed `transform.rotation` feeds Shapely's
+    `affinity.rotate` in the scene's y-up coordinates (positive =
+    counter-clockwise). Adding the Qt delta to the stored rotation
+    unchanged committed the mirror image of the preview — a 45° drag on
+    `shed` (starting at 5°) previewed at ~-40° but committed 50°, so the
+    object visibly flipped on the next rebuild. A 90° drag (what the
+    older rotate tests use) can't catch this for a rectangle: +90 and
+    -90 look nearly identical, which is why it went unnoticed."""
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    rotate_handle = next(h for h in window._selection_handles if h.kind == "rotate")
+
+    center = rotate_handle._center
+    # the handle starts straight above the centroid; up-and-right is 45° clockwise on screen
+    rotate_handle.setPos(QPointF(center.x() + 3, center.y() - 3))
+    preview = _fill_vertices(shed)
+    rotate_handle.end_drag()
+
+    window._rebuild_scene()
+    rebuilt_shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    assert _max_vertex_mismatch(preview, _fill_vertices(rebuilt_shed)) < 0.05
+
+
+def _expected_handle_positions(window: EditorWindow, object_id: str) -> tuple[QPointF, QPointF]:
+    """Where the resize/rotate handles belong for the object's *committed*
+    geometry: resize at the bounding box's top-right corner, rotate just
+    above its top edge — computed from `session.resolved` (the document's
+    truth), not from any Qt item, so it can't agree with a stale preview."""
+    minx, miny, maxx, maxy = window.session.resolved.get(object_id).geometry.bounds
+    page_height = window.session.doc.page_height
+    top, bottom = page_height - maxy, page_height - miny
+    margin = max((bottom - top) * 0.15, 0.5)
+    return QPointF(maxx, top), QPointF((minx + maxx) / 2, top - margin)
+
+
+def _assert_handles_on_object(window: EditorWindow, object_id: str) -> None:
+    expected_resize, expected_rotate = _expected_handle_positions(window, object_id)
+    handles = {h.kind: h for h in window._selection_handles}
+    for kind, expected in (("resize", expected_resize), ("rotate", expected_rotate)):
+        pos = handles[kind].pos()
+        assert pos.x() == pytest.approx(expected.x(), abs=0.01), kind
+        assert pos.y() == pytest.approx(expected.y(), abs=0.01), kind
+
+
+def test_handles_return_to_the_object_edge_after_a_real_rotate_drag(qtbot):
+    """Rich: "scaling or rotating an object causes their handles to move
+    off to a location away from the object." The handle used to stay
+    wherever the mouse dropped it (and the other handle stayed at the
+    pre-rotation bounding box), since a handle commit deliberately
+    doesn't rebuild the scene. Both must sit on the rotated object's
+    edge once the gesture ends."""
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    rotate_handle = next(h for h in window._selection_handles if h.kind == "rotate")
+
+    center = rotate_handle._center
+    _mouse_drag(window._view, rotate_handle.pos(), QPointF(center.x() + 3, center.y() - 3), steps=5)
+
+    _assert_handles_on_object(window, "shed")
+
+
+def test_handles_return_to_the_object_edge_after_a_real_resize_drag(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    resize_handle = next(h for h in window._selection_handles if h.kind == "resize")
+
+    _mouse_drag(window._view, resize_handle.pos(), _pos_at_distance_factor(resize_handle, 1.5), steps=5)
+
+    assert window.session.doc.get("shed").transform.scale != 1.0  # sanity: it actually resized
+    _assert_handles_on_object(window, "shed")
+
+
+def test_second_rotate_gesture_continues_from_the_first_without_snapping(qtbot):
+    """Rotating twice in a row (no reselect, no rebuild in between) must
+    not snap the object back at the start of the second gesture — the
+    first gesture's preview rotation has to be folded into the item's
+    real outline on commit, not left as a Qt transform the second
+    gesture then overwrites."""
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    shed = next(i for i in window._view.scene().items() if i.data(0) == "shed")
+    rotate_handle = next(h for h in window._selection_handles if h.kind == "rotate")
+
+    center = rotate_handle._center
+    _mouse_drag(window._view, rotate_handle.pos(), QPointF(center.x() + 3, center.y() - 3), steps=5)
+    after_first = _fill_vertices(shed)
+
+    # a tiny second gesture must barely move the outline
+    rotate_handle.setPos(rotate_handle.pos() + QPointF(0.01, 0))
+    assert _max_vertex_mismatch(_fill_vertices(shed), after_first) < 0.05
+    rotate_handle.end_drag()

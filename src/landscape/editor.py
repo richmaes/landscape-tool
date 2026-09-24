@@ -305,6 +305,7 @@ class SelectionHandle(QGraphicsEllipseItem):
         self.setZValue(2000)
         self.setToolTip("Drag to resize" if kind == "resize" else "Drag to rotate")
         self._dragging = False
+        self._placing = False
         self._center = target.centroid  # refreshed at each gesture's start too
         self._start_pos = None
         self._start_angle = 0.0
@@ -349,8 +350,18 @@ class SelectionHandle(QGraphicsEllipseItem):
         always scales x/y together, so this alone represents zoom)."""
         return self.view.transform().m11() or 1.0
 
+    def place_at(self, pos: QPointF) -> None:
+        """Move the handle without it counting as a drag — `setPos()`
+        alone would run `itemChange` below and start a fresh
+        resize/rotate gesture."""
+        self._placing = True
+        try:
+            self.setPos(pos)
+        finally:
+            self._placing = False
+
     def itemChange(self, change, value):
-        if change == QGraphicsItem.ItemPositionChange and self.scene() is not None:
+        if change == QGraphicsItem.ItemPositionChange and self.scene() is not None and not self._placing:
             if not self._dragging:
                 # A fresh gesture: re-read the target's *current* state,
                 # not whatever this handle was constructed with — a plain
@@ -380,7 +391,15 @@ class SelectionHandle(QGraphicsEllipseItem):
                 self.target.setScale(self._final_value / self._start_scale)
             else:
                 delta_angle = self._angle(value) - self._start_angle
-                self._final_value = self._start_rotation + delta_angle
+                # `delta_angle` is measured in Qt's y-down coordinates
+                # (positive = clockwise on screen, which is also what
+                # `setRotation` expects), but `transform.rotation` feeds
+                # Shapely's `affinity.rotate` in the scene's y-up
+                # coordinates (positive = counter-clockwise) — so the
+                # committed value takes the opposite sign. Adding it
+                # unchanged, as this once did, committed the mirror image
+                # of the preview, and the object flipped on the next rebuild.
+                self._final_value = self._start_rotation - delta_angle
                 self.target.setRotation(delta_angle)
             return value
         return super().itemChange(change, value)
@@ -1098,22 +1117,55 @@ class EditorWindow(QMainWindow):
         if target is None:
             return
 
-        rect = target.path().boundingRect()
         resize_handle = SelectionHandle("resize", target, self._view, self._on_handle_resized)
-        resize_handle.setPos(rect.topRight())
         rotate_handle = SelectionHandle("rotate", target, self._view, self._on_handle_rotated)
-        margin = max(rect.height() * 0.15, 0.5)
-        rotate_handle.setPos(rect.center().x(), rect.top() - margin)
-
         scene = self._view.scene()
         scene.addItem(resize_handle)
         scene.addItem(rotate_handle)
         self._selection_handles = [resize_handle, rotate_handle]
+        self._place_selection_handles(target)
+
+    def _place_selection_handles(self, target: EditableItem) -> None:
+        """Resize at the target's bounding-box top-right corner, rotate
+        just above its top edge."""
+        rect = target.path().boundingRect()
+        margin = max(rect.height() * 0.15, 0.5)
+        for handle in self._selection_handles:
+            if handle.kind == "resize":
+                handle.place_at(rect.topRight())
+            else:
+                handle.place_at(QPointF(rect.center().x(), rect.top() - margin))
+
+    def _settle_handle_gesture(self) -> None:
+        """After a resize/rotate handle commits, fold the result into the
+        selected item itself and put the handles back on its edge — a
+        real bug otherwise: the dragged handle stayed wherever the mouse
+        let go and the other stayed at the pre-gesture bounding box, both
+        drifting away from the object, since a handle commit deliberately
+        doesn't rebuild the scene (see `SelectionHandle`). Only this one
+        item is updated in place, so nothing is destroyed mid-event: its
+        path is regenerated from the freshly recomputed geometry and the
+        Qt-level preview rotation/scale is cleared. That also means a
+        second gesture starts from what's actually drawn, instead of
+        overwriting the first gesture's leftover preview transform and
+        snapping the object back."""
+        if not self._selection_handles:
+            return
+        target = self._selection_handles[0].target
+        geom = self.session.resolved.get(target.scene_object.id).geometry
+        page_height = self.session.doc.page_height
+        target.setRotation(0)
+        target.setScale(1)
+        target.setPath(_path_for_geometry(geom, page_height))
+        c = geom.centroid
+        target.centroid = QPointF(c.x, page_height - c.y)
+        self._place_selection_handles(target)
 
     def _on_handle_resized(self, value: float) -> None:
         if not self._selected_id:
             return
         self.session.set_scale(self._selected_id, value)
+        self._settle_handle_gesture()
         self._panel.scale_spin.blockSignals(True)
         self._panel.scale_spin.setValue(value)
         self._panel.scale_spin.blockSignals(False)
@@ -1122,6 +1174,7 @@ class EditorWindow(QMainWindow):
         if not self._selected_id:
             return
         self.session.set_rotation(self._selected_id, value)
+        self._settle_handle_gesture()
         self._panel.rotation_spin.blockSignals(True)
         self._panel.rotation_spin.setValue(value)
         self._panel.rotation_spin.blockSignals(False)
