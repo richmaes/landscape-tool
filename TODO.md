@@ -1,7 +1,7 @@
 # Landscape Rendering Tool — Task List
 
 **Status:** M0–M5, M1, M3b, and (bar one genuinely-blocked item) M8 all complete. The editor now covers its entire checklist: load, pan/zoom, select/move/resize/rotate (drag directly or via the panel), swatch-based material picking, relation editing, create-objects-from-a-palette, lossless save, undo/redo, autosave, layer toggling, watch-and-reload, live rule-checker feedback, and export-to-PNG/SVG/PDF — see the M8 section for what's honestly partial (resize/rotate is uniform-scale/absolute-rotation only) versus fully done. Its non-GUI logic lives in `EditorSession` (`editor_session.py`, zero Qt dependency), with `EditorWindow` as a thin wrapper. `scenes/backyard.yaml` is the real design (converted from `extraction/objects.json`), not just the `scenes/example.yaml` schema fixture — see M1 for a real finding this surfaced (the documented `deck_intrudes_on_keepout` doesn't actually hold against the keepout as drawn). Remaining open work: M6 (art mode, not started), M7 (export polish — DPI/scale bar/north arrow/batch — separate from the editor's own export, which just calls M5), M8b (headless/batch CLI), M9 (broader validation), M10 (docs).
-**Last updated:** 2026-09-23
+**Last updated:** 2026-09-24
 
 ## Decisions locked in
 
@@ -411,6 +411,14 @@ Gaps found, most important first:
 - [ ] Material authoring guide
 - [ ] `README.md` — install, quickstart, CLI usage
 - [ ] Worked example: the real site plan, from PDF through both render modes
+
+
+## Feature backlog
+
+Deferred on purpose, not forgotten: things Rich has asked to park until later. Not scheduled into any milestone yet.
+
+- [ ] **Zoom on the selected object** — zoom anchored on the selected object's centroid (the same point the resize/rotate handles pivot on) rather than the viewport center. Parked 2026-09-24; plain viewport-center zoom (the 2026-09-23 simplification, see M8) is working well enough for now — Rich: "Zoom bug seems better now." If picked up, avoid the earlier version's flaw: the anchor jumped between the viewport center and an object's center whenever the selection changed, which read as "scales wildly and then recenters."
+- [ ] **Handle placement on rotated objects** — the resize/rotate handles sit on the object's axis-aligned bounding box, so on a rotated object the resize handle lands on the box's corner, which can be off the shape itself. Adjust them to sit on the object's own (rotated) outline/corner instead. Parked 2026-09-24; the handles-drifting-away bug itself is fixed (see M8, `_settle_handle_gesture`).
 
 ---
 
