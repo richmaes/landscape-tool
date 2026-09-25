@@ -2200,9 +2200,9 @@ def art_calls(monkeypatch):
     calls = []
     real = render_art.render_art_image
 
-    def recording(doc, scene, materials, dpi=150.0, style=None, show_annotations=False):
-        calls.append({"dpi": dpi, "ids": {o.id for o in scene.objects}, "show_annotations": show_annotations})
-        return real(doc, scene, materials, dpi=dpi, style=style, show_annotations=show_annotations)
+    def recording(doc, scene, materials, dpi=150.0, style=None, show_annotations=False, **overlays):
+        calls.append({"dpi": dpi, "ids": {o.id for o in scene.objects}, "show_annotations": show_annotations, **overlays})
+        return real(doc, scene, materials, dpi=dpi, style=style, show_annotations=show_annotations, **overlays)
 
     monkeypatch.setattr(render_art, "render_art_image", recording)
     return calls
@@ -2495,3 +2495,28 @@ def test_overlays_belong_to_the_current_scene(qtbot):
     window = _open_backyard_editor(qtbot)
     for name in ("legend", "scale_indicator"):
         assert _overlay(window, name).scene() is window._view.scene()
+
+
+
+def test_art_preview_paints_the_legend_and_scale_indicator(qtbot, art_calls):
+    window = _open_backyard_editor(qtbot)
+    window._art_action.trigger()
+    assert art_calls[-1]["show_legend"] and art_calls[-1]["scale_indicator"]
+
+
+def test_moving_an_overlay_repaints_the_art_preview_where_it_was_moved(qtbot, art_calls):
+    """The preview cache is keyed by the document's revision, and moving an
+    overlay is an edit — so the preview can't show it in its old spot."""
+    window = _open_backyard_editor(qtbot)
+    window._art_action.trigger()
+    window._design_action.trigger()
+    _drag_overlay(window, "legend", 4.0, 3.0)
+    window._art_action.trigger()
+    assert len(art_calls) == 2
+
+
+def test_export_dialog_offers_the_scale_indicator(qtbot, tmp_path, monkeypatch):
+    window = _open_editor(qtbot)
+    dialog = _trigger_export(window, monkeypatch, tmp_path / "plan.png")
+    assert dialog.scale_indicator_check.isChecked()
+    assert dialog.options()["scale_indicator"] is True

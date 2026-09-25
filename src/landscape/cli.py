@@ -40,7 +40,10 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument(
         "--materials", default="assets/materials.yaml", help="Path to a material library YAML file"
     )
-    render.add_argument("--legend", action="store_true", help="Draw a material legend")
+    render.add_argument("--legend", action="store_true", help="Draw the drawing's legend box (movable in the editor)")
+    render.add_argument(
+        "--scale-indicator", action="store_true", help="Draw the drawing's scale line (movable in the editor)"
+    )
     render.add_argument(
         "--show-annotations", action="store_true", help="Draw annotation objects (technical view)"
     )
@@ -99,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
 
         kwargs = {
             "show_legend": args.legend,
+            "scale_indicator": args.scale_indicator,
             "show_annotations": args.show_annotations,
             "scale_bar": args.scale_bar,
             "north_arrow": args.north_arrow,

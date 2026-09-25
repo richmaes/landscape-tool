@@ -323,3 +323,93 @@ def test_the_fast_coarse_grid_blur_matches_a_true_gaussian():
     mask[100:300, 120:280] = 1.0
     fast, true = _blur(mask, 30), gaussian_filter(mask, 30)
     assert np.abs(fast - true).max() < 0.03
+
+
+# --- legend box and scale indicator, painted -------------------------------------------
+
+
+def _overlay_scene():
+    from shapely.geometry import Point
+
+    from landscape.schema import Placement
+
+    doc = _doc()
+    doc.legend = Placement(1.0, 9.0)  # a box hanging down from (1, 9)
+    doc.scale_indicator = Placement(5.0, 1.0)  # a 2.5 ft line (a quarter of 10 ft, rounded)
+    objects = [
+        _obj("lawn", box(0, 0, 10, 10), "lawn"),
+        _obj("deck", box(6, 6, 9, 9), "plain_deck", z=1),
+        _obj("firepit", Point(7.5, 3).buffer(0.8), None, z=2),
+    ]
+    return doc, ResolvedScene(objects=objects), _library()
+
+
+def test_painted_legend_sits_on_clean_paper_with_washed_swatches(tmp_path):
+    from landscape.overlays import legend_entries, legend_layout
+
+    doc, scene, lib = _overlay_scene()
+    arr = np.asarray(render_art_image(doc, scene, lib, dpi=144, show_legend=True), float)
+    plain = np.asarray(render_art_image(doc, scene, lib, dpi=144), float)
+    layout = legend_layout(doc, legend_entries(scene, lib))
+    ppu = 36 / 72 * 144
+
+    def px(a, x, y):
+        return a[int((10 - y) * ppu) - 1 : int((10 - y) * ppu) + 2, int(x * ppu) - 1 : int(x * ppu) + 2].reshape(-1, 3).mean(axis=0)
+
+    # inside the box, right of the text column: paper, although it's over the lawn
+    blank = (layout.x + layout.width - 0.1, layout.y - layout.height + 0.1)
+    assert np.abs(px(arr, *blank) - PAPER).max() < 25
+    assert np.abs(px(plain, *blank) - PAPER).max() > 25  # (it was lawn before)
+    deck_row = next(r for r in layout.rows if r.entry.label == "Deck")
+    swatch_centre = (deck_row.swatch_x + deck_row.swatch / 2, deck_row.swatch_y - deck_row.swatch / 2)
+    deck = np.array([0xE0, 0xB2, 0x7A], float)
+    assert np.abs(px(arr, *swatch_centre) - deck).max() < 45  # a watercolor swatch of the deck color
+    labels = [r.entry.label for r in layout.rows]
+    assert labels == ["Deck", "Lawn", "Firepit"]
+
+
+def test_painted_legend_has_pencil_text(tmp_path):
+    from landscape.overlays import legend_entries, legend_layout
+
+    doc, scene, lib = _overlay_scene()
+    arr = np.asarray(render_art_image(doc, scene, lib, dpi=144, show_legend=True), float).mean(axis=2)
+    layout = legend_layout(doc, legend_entries(scene, lib))
+    row = layout.rows[0]
+    ppu = 72
+    band = arr[int((10 - row.swatch_y) * ppu) : int((10 - row.swatch_y + row.swatch) * ppu),
+               int(row.text_x * ppu) : int((layout.x + layout.width) * ppu)]
+    assert band.min() < 150  # dark pencil strokes of the label
+
+
+def test_painted_scale_indicator_line_and_label(tmp_path):
+    from landscape.overlays import scale_indicator_layout
+
+    doc, scene, lib = _overlay_scene()
+    arr = np.asarray(render_art_image(doc, scene, lib, dpi=144, scale_indicator=True), float).mean(axis=2)
+    plain = np.asarray(render_art_image(doc, scene, lib, dpi=144), float).mean(axis=2)
+    bar = scale_indicator_layout(doc)
+    ppu = 72
+    row = int((10 - bar.y) * ppu)
+    span = slice(int((bar.x + 0.2) * ppu), int((bar.x + bar.length - 0.2) * ppu))
+    assert arr[row - 2 : row + 3, span].min(axis=0).mean() < plain[row - 2 : row + 3, span].min(axis=0).mean() - 30
+    above = arr[int((10 - bar.label_baseline_y - bar.text_size) * ppu) : int((10 - bar.label_baseline_y) * ppu), span]
+    assert above.min() < 150  # the "2.5 ft" label, above the line
+
+
+def test_overlays_are_off_unless_asked_for():
+    doc, scene, lib = _overlay_scene()
+    a = np.asarray(render_art_image(doc, scene, lib, dpi=40), float)
+    b = np.asarray(render_art_image(doc, scene, lib, dpi=40, show_legend=False, scale_indicator=False), float)
+    assert np.array_equal(a, b)
+
+
+def test_art_pdf_paints_the_legend_instead_of_the_old_vector_one(tmp_path):
+    import pdfplumber
+
+    from landscape.render_art import render_art_to_pdf
+
+    doc, scene, lib = _overlay_scene()
+    out = tmp_path / "a.pdf"
+    render_art_to_pdf(doc, scene, lib, out, dpi=40, show_legend=True, scale_indicator=True)
+    with pdfplumber.open(out) as pdf:
+        assert "Deck" not in (pdf.pages[0].extract_text() or "")  # painted into the image, not vector text

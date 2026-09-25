@@ -3,8 +3,10 @@
 recipes and the editor all dispatch through here, so they can't disagree
 about what a mode or format supports.
 
-Options every renderer takes: `show_legend`, `show_annotations`,
-`scale_bar`, `north_arrow`, `north_deg`. Flat PNG and every art format
+Options every renderer takes: `show_legend` and `scale_indicator` (the
+drawing's own legend box and scale line, at their saved positions),
+`show_annotations`, and `scale_bar` / `north_arrow` / `north_deg` (the strip
+below the drawing). Flat PNG and every art format
 also take `dpi` (for art it's the painting's resolution, embedded in
 PDF/SVG). Art also takes `style` (an `ArtStyle`).
 """

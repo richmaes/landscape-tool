@@ -102,12 +102,13 @@ def render_flat(
     scene: ResolvedScene,
     materials: MaterialLibrary,
     page_height: float,
-    show_legend: bool = False,
     show_annotations: bool = False,
 ) -> None:
     """Issue the flat-mode draw calls onto an existing cairo context. The
     caller owns the surface and its lifecycle (create, `finish()`/save) —
-    this only draws, so the exact same call works for SVG, PDF, or PNG."""
+    this only draws, so the exact same call works for SVG, PDF, or PNG.
+    (The legend box and scale indicator are drawn by `_draw_page`, which
+    knows the document they're positioned in.)"""
 
     for obj, material in iter_paint_order_with_material(scene, materials, show_annotations):
         geom = obj.geometry
@@ -142,9 +143,6 @@ def render_flat(
             ctx.set_line_width(material.edge.get("weight") or 1.0)
             ctx.stroke()
 
-    if show_legend:
-        _draw_legend(ctx, used_materials_in_scene(scene, materials, show_annotations), page_height)
-
 
 def _draw_annotation(ctx: cairo.Context, obj: ResolvedObject, page_height: float, label: str | None = None) -> None:
     """Annotations (e.g. the 14x10 clearance marker) and keepout zones
@@ -166,27 +164,62 @@ def _draw_annotation(ctx: cairo.Context, obj: ResolvedObject, page_height: float
     ctx.show_text(label if label is not None else obj.id)
 
 
-def _draw_legend(ctx: cairo.Context, materials: list[Material], page_height: float) -> None:
-    """An optional legend keyed to the materials actually used, drawn in
-    the bottom-left corner. Font/box sizes are in scene units so it scales
-    sensibly with `ctx`'s own transform."""
-    materials = sorted(materials, key=lambda m: m.name)
-    swatch = 0.4
-    line_height = 0.55
-    x = 0.5
-    y = page_height - 0.5 - len(materials) * line_height
-    ctx.set_font_size(0.35)
-    for material in materials:
-        ctx.set_source_rgb(*_rgb01(material.color))
-        ctx.rectangle(x, y, swatch, swatch)
-        ctx.fill()
-        ctx.set_source_rgb(0.1, 0.1, 0.1)
-        ctx.rectangle(x, y, swatch, swatch)
-        ctx.set_line_width(0.02)
+def _draw_overlays(
+    ctx: cairo.Context,
+    doc: SceneDocument,
+    scene: ResolvedScene,
+    materials: MaterialLibrary,
+    show_legend: bool,
+    scale_indicator: bool,
+) -> None:
+    """The drawing's legend box and scale indicator, at their saved (or
+    default) positions — the same layout the editor canvas and the art
+    renderer use (`overlays.py`)."""
+    from .overlays import FONT_FAMILY, legend_entries, legend_layout, scale_indicator_layout
+
+    h = doc.page_height
+    ink = (0.17, 0.16, 0.15)
+    thin = 0.5 / doc.scale  # half a point, in scene units (doc.scale is points per unit)
+    ctx.select_font_face(FONT_FAMILY)
+    if show_legend:
+        layout = legend_layout(doc, legend_entries(scene, materials))
+        ctx.rectangle(layout.x, h - layout.y, layout.width, layout.height)
+        ctx.set_source_rgb(1, 1, 1)
+        ctx.fill_preserve()
+        ctx.set_source_rgb(*ink)
+        ctx.set_line_width(thin * 1.5)
         ctx.stroke()
-        ctx.move_to(x + swatch + 0.15, y + swatch * 0.85)
-        ctx.show_text(material.name)
-        y += line_height
+        ctx.set_font_size(layout.title_size)
+        ctx.move_to(layout.title_x, h - layout.title_baseline_y)
+        ctx.show_text(layout.title)
+        ctx.set_font_size(layout.text_size)
+        for row in layout.rows:
+            top = h - row.swatch_y
+            if row.entry.shape == "square":
+                ctx.rectangle(row.swatch_x, top, row.swatch, row.swatch)
+            else:
+                ctx.new_sub_path()
+                ctx.arc(row.swatch_x + row.swatch / 2, top + row.swatch / 2, row.swatch / 2, 0, 2 * math.pi)
+            ctx.set_source_rgb(*(_rgb01(row.entry.color) if row.entry.color else (1, 1, 1)))
+            ctx.fill_preserve()
+            ctx.set_source_rgb(*ink)
+            ctx.set_line_width(thin)
+            ctx.stroke()
+            ctx.move_to(row.text_x, h - row.baseline_y)
+            ctx.show_text(row.entry.label)
+    if scale_indicator:
+        bar = scale_indicator_layout(doc)
+        y = h - bar.y
+        ctx.set_source_rgb(*ink)
+        ctx.set_line_width(thin * 2)
+        ctx.move_to(bar.x, y - bar.tick)
+        ctx.line_to(bar.x, y)
+        ctx.line_to(bar.x + bar.length, y)
+        ctx.line_to(bar.x + bar.length, y - bar.tick)
+        ctx.stroke()
+        ctx.set_font_size(bar.text_size)
+        ctx.move_to(bar.label_x, h - bar.label_baseline_y)
+        ctx.show_text(bar.label)
 
 
 # ---------------------------------------------------------------------------
@@ -344,9 +377,12 @@ def _draw_page(
     scale_bar: bool = False,
     north_arrow: bool = False,
     north_deg: float = 0.0,
+    show_legend: bool = False,
+    scale_indicator: bool = False,
     **kwargs,
 ) -> None:
-    """Everything on the page — the drawing, then the optional strip —
+    """Everything on the page — the drawing, its legend box and scale
+    indicator if asked for, then the optional strip —
     onto a context already scaled to scene units. Shared by all three
     export formats so they can't drift apart.
 
@@ -358,6 +394,7 @@ def _draw_page(
     ctx.rectangle(0, 0, doc.page_width, doc.page_height)
     ctx.clip()
     render_flat(ctx, scene, materials, doc.page_height, **kwargs)
+    _draw_overlays(ctx, doc, scene, materials, show_legend, scale_indicator)
     ctx.restore()
     if scale_bar or north_arrow:
         _draw_decoration_strip(ctx, doc, scale_bar, north_arrow, north_deg)
@@ -368,7 +405,8 @@ def _draw_page(
 # ---------------------------------------------------------------------------
 #
 # Each takes `scale_bar=`, `north_arrow=` and `north_deg=` (see above) plus
-# render_flat's own `show_legend=` / `show_annotations=`.
+# `show_legend=` / `scale_indicator=` (the drawing's own legend box and scale
+# line) and `show_annotations=`.
 
 
 def render_scene_to_svg(

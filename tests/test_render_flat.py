@@ -349,3 +349,43 @@ def test_the_drawing_never_spills_into_the_strip(tmp_path):
         strip_row = 864 + 10  # 10 pt below the drawing's edge
         left_half = [img.getpixel((x, strip_row))[:3] for x in range(img.size[0] // 2)]
     assert all(pixel == (255, 255, 255) for pixel in left_half)
+
+
+# --- the drawing's own legend box and scale indicator (flat) ---------------------------
+
+
+def test_flat_legend_is_drawn_at_its_saved_position_with_uniform_swatches(tmp_path):
+    from landscape.overlays import legend_entries, legend_layout
+    from landscape.schema import Placement, SceneDocument
+
+    doc = SceneDocument(page_width=10, page_height=10, scale=36)
+    doc.legend = Placement(5.0, 8.0)
+    lib = _tiny_library()
+    scene = ResolvedScene(objects=[_obj("a", box(0, 0, 2, 2), material="red"), _obj("b", box(3, 0, 4, 1), material="blue")])
+    out = tmp_path / "l.png"
+    render_scene_to_png(doc, scene, lib, out, dpi=144, show_legend=True)
+
+    layout = legend_layout(doc, legend_entries(scene, lib))
+    assert {r.swatch for r in layout.rows} == {layout.rows[0].swatch}
+    ppu = 72
+    with Image.open(out) as img:
+        for row, colour in zip(layout.rows, [(0, 0, 255), (255, 0, 0)]):  # Blue, Red: sorted by name
+            cx, cy = row.swatch_x + row.swatch / 2, row.swatch_y - row.swatch / 2
+            assert img.getpixel((int(cx * ppu), int((10 - cy) * ppu)))[:3] == colour
+
+
+def test_flat_scale_indicator_is_drawn_when_asked(tmp_path):
+    from landscape.overlays import scale_indicator_layout
+    from landscape.schema import SceneDocument
+
+    doc = SceneDocument(page_width=10, page_height=10, scale=36)
+    scene = ResolvedScene(objects=[])
+    with_bar, without = tmp_path / "a.png", tmp_path / "b.png"
+    render_scene_to_png(doc, scene, _tiny_library(), with_bar, dpi=144, scale_indicator=True)
+    render_scene_to_png(doc, scene, _tiny_library(), without, dpi=144)
+
+    bar = scale_indicator_layout(doc)
+    row, col = int((10 - bar.y) * 72), int((bar.x + bar.length / 2) * 72)
+    with Image.open(with_bar) as a, Image.open(without) as b:
+        assert sum(a.getpixel((col, row))[:3]) < 200
+        assert b.getpixel((col, row))[:3] == (255, 255, 255)

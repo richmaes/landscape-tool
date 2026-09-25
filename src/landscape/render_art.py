@@ -488,7 +488,12 @@ def render_art_image(
     dpi: float = 150.0,
     style: ArtStyle | None = None,
     show_annotations: bool = False,
+    show_legend: bool = False,
+    scale_indicator: bool = False,
 ) -> Image.Image:
+    """The scene as a watercolor-and-pencil painting. `show_legend` /
+    `scale_indicator` paint the drawing's legend box and scale indicator at
+    their saved (or default) positions, in the same pencil and wash."""
     style = style or ArtStyle()
     rng = np.random.default_rng(style.seed)
     canvas = _Canvas(doc, dpi, style)
@@ -549,12 +554,85 @@ def render_art_image(
         dashes = _dash(outline, 0.35, 0.2)
         canvas.multiply(crop, canvas.stroke_mask(dashes, crop, width, 0.5 * style.pencil), pencil)
 
+    if show_legend or scale_indicator:
+        _paint_overlays(canvas, doc, scene, materials, style, rng, clouds, wash, show_legend, scale_indicator)
+
     if not style.paper_image:  # a scan brings its own grain
         grain = _cloud(rng, (canvas.h, canvas.w), 0.004 * dpi)
         tooth = _cloud(rng, (canvas.h, canvas.w), 0.03 * dpi)
         canvas.rgb *= 1 - style.grain * (0.6 * (0.5 + 0.5 * grain) + 0.4 * (0.5 + 0.5 * tooth))[..., None]
 
     return Image.fromarray((np.clip(canvas.rgb, 0, 1) * 255).astype(np.uint8), "RGB")
+
+
+def _text_mask(canvas: _Canvas, crop, text: str, size: float, x: float, baseline_y: float) -> np.ndarray:
+    from .overlays import FONT_FAMILY
+
+    surface, ctx = canvas._context(crop)
+    ctx.select_font_face(FONT_FAMILY)
+    ctx.set_font_size(size)
+    ctx.move_to(x, canvas.page_height - baseline_y)
+    ctx.set_source_rgba(0, 0, 0, 1)
+    ctx.show_text(text)
+    return canvas._read(surface)
+
+
+def _paint_overlays(canvas: _Canvas, doc, scene, materials, style: ArtStyle, rng, clouds, wash,
+                    show_legend: bool, scale_indicator: bool) -> None:
+    """The legend box and scale indicator, drawn like the rest of the
+    painting: the paper lifted clean inside the box so it reads over
+    whatever is beneath, a wobbly pencil frame, swatches washed in each
+    material's watercolor (circles for unassigned items, pencil only), and
+    graphite text. Layout comes from `overlays.py`, same as the editor's."""
+    import dataclasses
+
+    from shapely.geometry import box as rect
+
+    from .overlays import legend_entries, legend_layout, scale_indicator_layout
+
+    pencil = _rgb(style.pencil_color)
+    width = style.pencil_width_in * canvas.units_per_inch
+    ink = max(style.pencil, 0.75)  # text and frames must stay legible even with light pencil
+
+    def pencil_lines(geoms, crop, alpha, amp=0.15):
+        noise = _Noise(rng, (0.9, 1.6, 2.8))
+        wobbled = [_wobble(g, noise, style.wobble * amp, step=0.05) for g in geoms]
+        canvas.multiply(crop, canvas.stroke_mask(wobbled, crop, width, alpha), pencil)
+
+    if show_legend:
+        layout = legend_layout(doc, legend_entries(scene, materials))
+        frame = rect(layout.x, layout.y - layout.height, layout.x + layout.width, layout.y)
+        crop = canvas.crop_for(frame, margin=0.3)
+        if crop is not None:
+            canvas.lift(crop, canvas.fill_mask(frame, crop))
+            pencil_lines([frame.exterior], crop, 0.8 * ink)
+            pencil_lines([frame.exterior], crop, 0.3 * ink, amp=0.3)
+            canvas.multiply(crop, _text_mask(canvas, crop, layout.title, layout.title_size, layout.title_x,
+                                             layout.title_baseline_y) * 0.9 * ink, pencil)
+            swatch_style = dataclasses.replace(style, wobble=layout.rows[0].swatch * 0.04 if layout.rows else 0.01)
+            for row in layout.rows:
+                if row.entry.shape == "square":
+                    shape = rect(row.swatch_x, row.swatch_y - row.swatch, row.swatch_x + row.swatch, row.swatch_y)
+                    material = materials.resolve(row.entry.material_id)
+                    canvas.multiply(crop, wash(canvas, shape, crop, swatch_style, rng, clouds), _pigment(material))
+                    outline = shape.exterior
+                else:
+                    centre = Point(row.swatch_x + row.swatch / 2, row.swatch_y - row.swatch / 2)
+                    outline = centre.buffer(row.swatch / 2, 32).exterior
+                pencil_lines([outline], crop, 0.7 * ink, amp=0.05)
+                canvas.multiply(crop, _text_mask(canvas, crop, row.entry.label, layout.text_size, row.text_x,
+                                                 row.baseline_y) * 0.85 * ink, pencil)
+
+    if scale_indicator:
+        bar = scale_indicator_layout(doc)
+        line = LineString([(bar.x, bar.y + bar.tick), (bar.x, bar.y), (bar.x + bar.length, bar.y),
+                           (bar.x + bar.length, bar.y + bar.tick)])
+        crop = canvas.crop_for(line.buffer(bar.text_size * 2), margin=0.2)
+        if crop is not None:
+            pencil_lines([line], crop, 0.85 * ink, amp=0.08)
+            pencil_lines([line], crop, 0.35 * ink, amp=0.15)
+            canvas.multiply(crop, _text_mask(canvas, crop, bar.label, bar.text_size, bar.label_x,
+                                             bar.label_baseline_y) * 0.9 * ink, pencil)
 
 
 def _dash(line: BaseGeometry, on: float, off: float) -> list[BaseGeometry]:
@@ -596,8 +674,9 @@ def _art_page(
     show_annotations: bool,
 ) -> None:
     """Paint the rendered image over the drawing area of a context already
-    scaled to scene units, then the vector extras on top."""
-    from .render_flat import _draw_decoration_strip, _draw_legend, used_materials_in_scene
+    scaled to scene units, then the vector strip on top. (The legend box and
+    scale indicator are part of the painting itself.)"""
+    from .render_flat import _draw_decoration_strip
 
     rgba = painting.convert("RGBA")
     # cairo wants premultiplied BGRA; an opaque image needs only the swizzle
@@ -613,17 +692,16 @@ def _art_page(
     ctx.restore()
     source.finish()
 
-    if show_legend:
-        _draw_legend(ctx, used_materials_in_scene(scene, materials, show_annotations), doc.page_height)
     if scale_bar or north_arrow:
         _draw_decoration_strip(ctx, doc, scale_bar, north_arrow, north_deg)
 
 
 def _export_art(surface_factory, doc, scene, materials, path, dpi, style, scale_bar, north_arrow, north_deg,
-                show_legend, show_annotations):
+                show_legend, show_annotations, scale_indicator=False):
     from .render_flat import _page_size_pt
 
-    painting = render_art_image(doc, scene, materials, dpi=dpi, style=style, show_annotations=show_annotations)
+    painting = render_art_image(doc, scene, materials, dpi=dpi, style=style, show_annotations=show_annotations,
+                                show_legend=show_legend, scale_indicator=scale_indicator)
     width, height = _page_size_pt(doc, scale_bar or north_arrow)
     surface = surface_factory(str(path), width, height)
     ctx = cairo.Context(surface)
@@ -633,31 +711,35 @@ def _export_art(surface_factory, doc, scene, materials, path, dpi, style, scale_
 
 
 def render_art_to_pdf(doc, scene, materials, path, dpi: float = ART_DEFAULT_DPI, style: ArtStyle | None = None,
-                      scale_bar=False, north_arrow=False, north_deg=0.0, show_legend=False, show_annotations=False):
+                      scale_bar=False, north_arrow=False, north_deg=0.0, show_legend=False, show_annotations=False,
+                      scale_indicator=False):
     _export_art(cairo.PDFSurface, doc, scene, materials, path, dpi, style, scale_bar, north_arrow, north_deg,
-                show_legend, show_annotations)
+                show_legend, show_annotations, scale_indicator)
 
 
 def render_art_to_svg(doc, scene, materials, path, dpi: float = ART_DEFAULT_DPI, style: ArtStyle | None = None,
-                      scale_bar=False, north_arrow=False, north_deg=0.0, show_legend=False, show_annotations=False):
+                      scale_bar=False, north_arrow=False, north_deg=0.0, show_legend=False, show_annotations=False,
+                      scale_indicator=False):
     def svg_surface(p, w, h):
         surface = cairo.SVGSurface(p, w, h)
         surface.set_document_unit(cairo.SVGUnit.PT)
         return surface
 
     _export_art(svg_surface, doc, scene, materials, path, dpi, style, scale_bar, north_arrow, north_deg,
-                show_legend, show_annotations)
+                show_legend, show_annotations, scale_indicator)
 
 
 def render_art_to_png(doc, scene, materials, path, dpi: float = ART_DEFAULT_DPI, style: ArtStyle | None = None,
-                      scale_bar=False, north_arrow=False, north_deg=0.0, show_legend=False, show_annotations=False):
+                      scale_bar=False, north_arrow=False, north_deg=0.0, show_legend=False, show_annotations=False,
+                      scale_indicator=False):
     """Same page as the PDF, rasterised at `dpi`, with the DPI recorded in
     the file (see render_flat.render_scene_to_png)."""
     import io
 
     from .render_flat import _page_size_pt
 
-    painting = render_art_image(doc, scene, materials, dpi=dpi, style=style, show_annotations=show_annotations)
+    painting = render_art_image(doc, scene, materials, dpi=dpi, style=style, show_annotations=show_annotations,
+                                show_legend=show_legend, scale_indicator=scale_indicator)
     width_pt, height_pt = _page_size_pt(doc, scale_bar or north_arrow)
     px_per_point = dpi / 72.0
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, round(width_pt * px_per_point), round(height_pt * px_per_point))

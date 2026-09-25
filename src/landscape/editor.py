@@ -1120,6 +1120,7 @@ class ExportOptionsDialog(QDialog):
         "wash": "diffuse",
         "dpi": 300,
         "show_legend": True,  # what export always did before this dialog existed
+        "scale_indicator": True,
         "scale_bar": False,
         "north_arrow": False,
         "north_deg": 0.0,
@@ -1148,8 +1149,10 @@ class ExportOptionsDialog(QDialog):
             "Pixels per inch of the drawing's print size. Flat SVG/PDF are vector and don't use it; "
             "art mode is a painting, so it applies to every format (higher is slower)"
         )
-        self.legend_check = QCheckBox("Material legend")
+        self.legend_check = QCheckBox("Legend box")
         self.legend_check.setChecked(values["show_legend"])
+        self.scale_indicator_check = QCheckBox("Scale indicator on the drawing")
+        self.scale_indicator_check.setChecked(values["scale_indicator"])
         self.annotations_check = QCheckBox("Annotations (dashed technical marks)")
         self.annotations_check.setChecked(values["show_annotations"])
         self.scale_bar_check = QCheckBox("Scale bar")
@@ -1176,6 +1179,7 @@ class ExportOptionsDialog(QDialog):
         layout.addRow("Wash", self.wash_combo)
         layout.addRow("Resolution", self.dpi_spin)
         layout.addRow(self.legend_check)
+        layout.addRow(self.scale_indicator_check)
         layout.addRow(self.annotations_check)
         layout.addRow(self.scale_bar_check)
         layout.addRow(self.north_arrow_check)
@@ -1197,6 +1201,7 @@ class ExportOptionsDialog(QDialog):
             "wash": self.wash_combo.currentData(),
             "dpi": self.dpi_spin.value(),
             "show_legend": self.legend_check.isChecked(),
+            "scale_indicator": self.scale_indicator_check.isChecked(),
             "show_annotations": self.annotations_check.isChecked(),
             "scale_bar": self.scale_bar_check.isChecked(),
             "north_arrow": self.north_arrow_check.isChecked(),
@@ -1625,7 +1630,8 @@ class EditorWindow(QMainWindow):
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             image = render_art.render_art_image(
-                self.session.doc, scene, self.session.materials, dpi=dpi, show_annotations=self._show_annotations
+                self.session.doc, scene, self.session.materials, dpi=dpi, show_annotations=self._show_annotations,
+                show_legend=True, scale_indicator=True,  # the drawing's overlays, as on the design canvas
             )
         finally:
             QApplication.restoreOverrideCursor()

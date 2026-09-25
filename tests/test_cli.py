@@ -138,3 +138,13 @@ def test_render_pdf_with_scale_bar_and_north_arrow(tmp_path):
         page = pdf.pages[0]
         assert page.height == 40 * 36 + DECORATION_STRIP_PT  # example.yaml: 40 ft at 36 pt/ft
         assert "1:24" in page.extract_text()
+
+
+def test_render_with_the_drawings_legend_and_scale_indicator(tmp_path, monkeypatch):
+    import landscape.cli as cli
+
+    calls = []
+    monkeypatch.setattr(cli, "render_to_file", lambda *a, **k: calls.append(k))
+    main(["render", str(EXAMPLE_SCENE), "--out", str(tmp_path / "a.png"), "--materials", str(DEFAULT_MATERIALS),
+          "--legend", "--scale-indicator"])
+    assert calls[0]["show_legend"] and calls[0]["scale_indicator"]

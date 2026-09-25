@@ -40,6 +40,7 @@ class LegendEntry:
     shape: str  # "square" for a material, "circle" for an item with none chosen yet
     color: str | None
     label: str
+    material_id: str | None = None  # the material a square stands for
 
 
 @dataclass
@@ -105,7 +106,7 @@ def legend_entries(scene: ResolvedScene, materials: MaterialLibrary, hidden_laye
             group = _item_group(obj.id)
             circles.setdefault(group, LegendEntry("circle", None, group.replace("_", " ").capitalize()))
         else:
-            squares.setdefault(material.id, LegendEntry("square", material.color, material.name))
+            squares.setdefault(material.id, LegendEntry("square", material.color, material.name, material.id))
     return sorted(squares.values(), key=lambda e: e.label) + sorted(circles.values(), key=lambda e: e.label)
 
 

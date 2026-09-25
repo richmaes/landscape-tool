@@ -18,7 +18,8 @@ it's run from (`materials`, if omitted, falls back to
 `assets/materials.yaml` in the working directory, like `landscape render`).
 Each output takes the same options as `landscape render`: `mode` (`flat`
 or `art`), `dpi` (flat PNG, or any art output — a `dpi` in `defaults`
-simply doesn't apply to flat SVG/PDF outputs), `legend`, `annotations`,
+simply doesn't apply to flat SVG/PDF outputs), `legend`, `scale_indicator`,
+`annotations`,
 `scale_bar`, `north_arrow`, `north_angle`, and for art mode `wash`
 (`diffuse` or `layered`) and `paper_image` (a scan, relative to the recipe).
 
@@ -43,6 +44,7 @@ _WASHES = ("diffuse", "layered")
 _TOP_LEVEL_KEYS = {"scene", "materials", "defaults", "outputs"}
 _BOOL_OPTIONS = {
     "legend": "show_legend",
+    "scale_indicator": "scale_indicator",
     "annotations": "show_annotations",
     "scale_bar": "scale_bar",
     "north_arrow": "north_arrow",
