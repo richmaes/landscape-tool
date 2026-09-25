@@ -36,7 +36,10 @@ from typing import Callable
 from PySide6.QtCore import QFileSystemWatcher, QPointF, Qt
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPainterPathStroker, QPen, QWheelEvent
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
     QGraphicsEllipseItem,
@@ -49,6 +52,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QSpinBox,
     QSplitter,
     QWidget,
 )
@@ -918,6 +922,84 @@ class PropertiesPanel(QWidget):
         self.setEnabled(False)
 
 
+EXPORT_EXTENSIONS = (".png", ".svg", ".pdf")
+
+
+class ExportOptionsDialog(QDialog):
+    """File > Export's second step, after the file picker: the M7 export
+    options the CLI has, for the designer — DPI (PNG only), legend,
+    annotations, scale bar, north arrow and its angle. `options()` returns
+    exactly the keyword arguments `EditorSession.export()` passes on to
+    the renderer for this file's format."""
+
+    DEFAULTS = {
+        "dpi": 300,
+        "show_legend": True,  # what export always did before this dialog existed
+        "scale_bar": False,
+        "north_arrow": False,
+        "north_deg": 0.0,
+    }
+
+    def __init__(self, parent: QWidget | None, path: str | Path, show_annotations: bool, previous: dict | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Export options")
+        self._is_png = Path(path).suffix.lower() == ".png"
+        values = {**self.DEFAULTS, "show_annotations": show_annotations, **(previous or {})}
+
+        self.dpi_spin = QSpinBox()
+        self.dpi_spin.setRange(36, 1200)
+        self.dpi_spin.setSuffix(" DPI")
+        self.dpi_spin.setValue(int(values["dpi"]))
+        self.dpi_spin.setEnabled(self._is_png)
+        self.dpi_spin.setToolTip("Pixels per inch of the drawing's print size (PNG only; SVG and PDF are vector)")
+        self.legend_check = QCheckBox("Material legend")
+        self.legend_check.setChecked(values["show_legend"])
+        self.annotations_check = QCheckBox("Annotations (dashed technical marks)")
+        self.annotations_check.setChecked(values["show_annotations"])
+        self.scale_bar_check = QCheckBox("Scale bar")
+        self.scale_bar_check.setChecked(values["scale_bar"])
+        self.north_arrow_check = QCheckBox("North arrow")
+        self.north_arrow_check.setChecked(values["north_arrow"])
+        self.north_angle_spin = QDoubleSpinBox()
+        self.north_angle_spin.setRange(-360, 360)
+        self.north_angle_spin.setSuffix("°")
+        self.north_angle_spin.setValue(values["north_deg"])
+        self.north_angle_spin.setToolTip("Degrees clockwise from page-up that north lies at")
+        self.north_arrow_check.toggled.connect(self.north_angle_spin.setEnabled)
+        self.north_angle_spin.setEnabled(self.north_arrow_check.isChecked())
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QFormLayout(self)
+        layout.addRow("Resolution", self.dpi_spin)
+        layout.addRow(self.legend_check)
+        layout.addRow(self.annotations_check)
+        layout.addRow(self.scale_bar_check)
+        layout.addRow(self.north_arrow_check)
+        layout.addRow("North is at", self.north_angle_spin)
+        layout.addRow(buttons)
+
+    def remembered(self) -> dict:
+        """Every choice, for pre-filling the next export (DPI included even
+        when this export isn't a PNG)."""
+        return {
+            "dpi": self.dpi_spin.value(),
+            "show_legend": self.legend_check.isChecked(),
+            "show_annotations": self.annotations_check.isChecked(),
+            "scale_bar": self.scale_bar_check.isChecked(),
+            "north_arrow": self.north_arrow_check.isChecked(),
+            "north_deg": self.north_angle_spin.value(),
+        }
+
+    def options(self) -> dict:
+        options = self.remembered()
+        if not self._is_png:
+            del options["dpi"]  # the SVG/PDF renderers don't take one
+        return options
+
+
 class EditorWindow(QMainWindow):
     """A thin Qt wrapper around `EditorSession`: this class owns widgets,
     draw calls, and event wiring; `self.session` owns the actual scene
@@ -945,6 +1027,7 @@ class EditorWindow(QMainWindow):
         self._file_watcher = QFileSystemWatcher()
         self._file_watcher.fileChanged.connect(self._on_file_changed_externally)
         self._layers_menu = None
+        self._last_export_options: dict | None = None  # pre-fills the next File > Export
 
         self._view = SceneGraphicsView()
         self._panel = PropertiesPanel(self.session.materials)
@@ -1068,9 +1151,18 @@ class EditorWindow(QMainWindow):
         )
         if not path:
             return
+        if Path(path).suffix.lower() not in EXPORT_EXTENSIONS:
+            QMessageBox.warning(
+                self, "Export failed", f"Unsupported file type '{Path(path).suffix}' (use .png, .svg, or .pdf)"
+            )
+            return
+        dialog = ExportOptionsDialog(self, path, self._show_annotations, self._last_export_options)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._last_export_options = dialog.remembered()
         try:
-            self.session.export(path, show_legend=True, show_annotations=self._show_annotations)
-        except ValueError as exc:
+            self.session.export(path, **dialog.options())
+        except (ValueError, OSError) as exc:
             QMessageBox.warning(self, "Export failed", str(exc))
             return
         self.statusBar().showMessage(f"Exported to {path}")

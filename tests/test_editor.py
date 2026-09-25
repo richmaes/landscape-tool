@@ -38,7 +38,9 @@ DEFAULT_MATERIALS = Path(__file__).parent.parent / "assets" / "materials.yaml"
 
 @pytest.fixture(autouse=True)
 def _answer_close_prompts_with_discard():
-    """Closing an EditorWindow with unsaved changes now asks Save/Discard/
+    """Also accepts File > Export's options dialog — see below.
+
+    Closing an EditorWindow with unsaved changes now asks Save/Discard/
     Cancel via a modal QMessageBox.question — and pytest-qt closes every
     registered window at teardown, so any test that leaves edits unsaved
     would block forever on a dialog nobody answers (a real hang, found
@@ -49,7 +51,16 @@ def _answer_close_prompts_with_discard():
 
     from PySide6.QtWidgets import QMessageBox
 
-    with patch.object(QMessageBox, "question", return_value=QMessageBox.Discard):
+    from PySide6.QtWidgets import QDialog
+
+    from landscape.editor import ExportOptionsDialog
+
+    # Same hazard, same fix: File > Export shows a modal options dialog
+    # after the file picker. Accept it with its defaults unless a test says
+    # otherwise.
+    with patch.object(QMessageBox, "question", return_value=QMessageBox.Discard), patch.object(
+        ExportOptionsDialog, "exec", return_value=QDialog.Accepted
+    ):
         yield
 
 def _obj(id, geom, material=None, z=0, annotation=False, rule=None):
@@ -2027,3 +2038,118 @@ def test_closing_with_nothing_unsaved_does_not_ask(qtbot, monkeypatch):
 
     assert asked == []
     assert not window.isVisible()
+
+
+
+# --- File > Export options dialog (M7) -------------------------------------
+
+
+def _trigger_export(window: EditorWindow, monkeypatch, out: Path, configure=None, accept: bool = True):
+    """File > Export with the file picker answered `out`, and the options
+    dialog optionally configured (a callable given the dialog) before it's
+    accepted or cancelled."""
+    from PySide6.QtWidgets import QDialog, QFileDialog
+
+    from landscape.editor import ExportOptionsDialog
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), ""))
+    shown = []
+
+    def fake_exec(dialog):
+        shown.append(dialog)
+        if configure:
+            configure(dialog)
+        return QDialog.Accepted if accept else QDialog.Rejected
+
+    monkeypatch.setattr(ExportOptionsDialog, "exec", fake_exec)
+    export_action = next(a for a in window.menuBar().actions()[0].menu().actions() if a.text() == "&Export…")
+    export_action.trigger()
+    return shown[0] if shown else None
+
+
+def test_export_options_are_applied_to_the_exported_file(qtbot, tmp_path, monkeypatch):
+    from PIL import Image
+
+    from landscape.render_flat import DECORATION_STRIP_PT
+
+    window = _open_editor(qtbot)
+    out = tmp_path / "plan.png"
+
+    def configure(dialog):
+        dialog.dpi_spin.setValue(150)
+        dialog.scale_bar_check.setChecked(True)
+        dialog.north_arrow_check.setChecked(True)
+        dialog.north_angle_spin.setValue(20)
+
+    _trigger_export(window, monkeypatch, out, configure)
+
+    doc = window.session.doc
+    with Image.open(out) as img:
+        assert round(img.info["dpi"][0]) == 150
+        assert img.size[1] == round((doc.page_height * doc.scale + DECORATION_STRIP_PT) * 150 / 72)
+
+
+def test_export_options_dialog_defaults(qtbot, tmp_path, monkeypatch):
+    window = _open_editor(qtbot, show_annotations=True)
+    dialog = _trigger_export(window, monkeypatch, tmp_path / "plan.png")
+
+    assert dialog.dpi_spin.value() == 300
+    assert dialog.legend_check.isChecked()  # what export always did before this dialog existed
+    assert dialog.annotations_check.isChecked()  # follows the editor's own annotation view
+    assert not dialog.scale_bar_check.isChecked()
+    assert not dialog.north_arrow_check.isChecked()
+    assert not dialog.north_angle_spin.isEnabled()  # only meaningful with a north arrow
+
+
+def test_dpi_only_applies_to_png(qtbot, tmp_path, monkeypatch):
+    window = _open_editor(qtbot)
+    dialog = _trigger_export(window, monkeypatch, tmp_path / "plan.pdf")
+
+    assert not dialog.dpi_spin.isEnabled()
+    assert (tmp_path / "plan.pdf").read_bytes()[:4] == b"%PDF"  # and no stray dpi reached the PDF renderer
+
+
+def test_north_angle_enables_with_the_north_arrow(qtbot, tmp_path, monkeypatch):
+    window = _open_editor(qtbot)
+    dialog = _trigger_export(window, monkeypatch, tmp_path / "plan.png")
+
+    dialog.north_arrow_check.setChecked(True)
+
+    assert dialog.north_angle_spin.isEnabled()
+
+
+def test_cancelling_export_options_writes_nothing(qtbot, tmp_path, monkeypatch):
+    window = _open_editor(qtbot)
+    out = tmp_path / "plan.png"
+
+    _trigger_export(window, monkeypatch, out, accept=False)
+
+    assert not out.exists()
+    assert window.statusBar().currentMessage() == ""
+
+
+def test_export_options_are_remembered_for_the_next_export(qtbot, tmp_path, monkeypatch):
+    window = _open_editor(qtbot)
+
+    def configure(dialog):
+        dialog.dpi_spin.setValue(200)
+        dialog.scale_bar_check.setChecked(True)
+
+    _trigger_export(window, monkeypatch, tmp_path / "a.png", configure)
+    second = _trigger_export(window, monkeypatch, tmp_path / "b.png")
+
+    assert second.dpi_spin.value() == 200
+    assert second.scale_bar_check.isChecked()
+
+
+def test_bad_extension_warns_before_asking_for_options(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    window = _open_editor(qtbot)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
+
+    dialog = _trigger_export(window, monkeypatch, tmp_path / "plan.jpg")
+
+    assert dialog is None  # no point choosing options for a file we can't write
+    assert warnings
