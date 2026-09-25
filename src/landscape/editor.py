@@ -897,15 +897,51 @@ class SceneGraphicsView(QGraphicsView):
         # under it now, not just where the last click was.
         self.setMouseTracking(True)
         self._pointer_pos = None  # viewport pixels, not scene coords — survives zoom/pan
+        self._full_quality = True
+        self._zoom_settle_timer = QTimer(self)
+        self._zoom_settle_timer.setSingleShot(True)
+        self._zoom_settle_timer.setInterval(self.ZOOM_SETTLE_MS)
+        self._zoom_settle_timer.timeout.connect(lambda: self._set_interactive_quality(True))
         # Covers the viewport area outside the scene's own background
         # (e.g. once panned/zoomed past the drawing's edge) with the same
         # off-white paper tone, so there's no stark-white gap at the edges.
         self.setBackgroundBrush(QBrush(BACKGROUND_COLOR))
 
+    ZOOM_SETTLE_MS = 200  # full-quality redraw this long after the last scroll
+
     def wheelEvent(self, event: QWheelEvent) -> None:
-        factor = self.ZOOM_PER_TICK if event.angleDelta().y() > 0 else 1 / self.ZOOM_PER_TICK
+        """Zoom in proportion to how far the wheel or trackpad actually
+        scrolled: a mouse notch (120) is one `ZOOM_PER_TICK` step, a
+        trackpad's many small deltas are fractions of one. Two real bugs
+        this replaces: every event zoomed a full step whatever its size
+        (a trackpad flick was dozens of them, each forcing a full redraw,
+        so zoom lagged behind the fingers), and a zero-length event — how a
+        trackpad gesture ends — counted as 'zoom out', so every zoom backed
+        up one step at the end."""
+        delta = event.angleDelta().y()
+        event.accept()
+        if delta == 0:
+            return
+        factor = self.ZOOM_PER_TICK ** (delta / 120.0)
+        self._set_interactive_quality(False)
         self.scale(factor, factor)
+        self._zoom_settle_timer.start()
         self.zoomed.emit()
+
+    def _set_interactive_quality(self, full: bool) -> None:
+        """While a zoom gesture is under way, redraw lighter: no edge
+        smoothing and no paver joint lines (thousands of brick outlines,
+        about half the cost of a redraw). Full quality returns
+        `ZOOM_SETTLE_MS` after the last scroll."""
+        if full == self._full_quality:
+            return
+        self._full_quality = full
+        self.setRenderHint(QPainter.Antialiasing, full)
+        if self.scene() is not None:
+            for item in self.scene().items():
+                joints = getattr(item, "joints_item", None)
+                if joints is not None:
+                    joints.setVisible(full)
 
     def mousePressEvent(self, event) -> None:
         self._pointer_pos = event.position().toPoint()

@@ -2639,3 +2639,54 @@ def test_selecting_an_object_never_shifts_the_canvas(qtbot):
     assert window._panel.width() == panel_width
     after = window._view.mapToScene(window._view.viewport().rect().center())
     assert (after.x(), after.y()) == pytest.approx((before.x(), before.y()), abs=1e-6)
+
+
+# --- zoom: trackpad-sized steps, gesture ends, and lightweight redraws ---------------
+
+
+def _zoom_level(window) -> float:
+    return window._view.transform().m11()
+
+
+def test_a_zero_length_scroll_does_not_zoom(qtbot):
+    """A real bug: a trackpad gesture ends with zero-length scroll events,
+    and the handler treated anything not 'up' as 'down' — so every zoom
+    backed up one step at the end."""
+    window = _open_editor(qtbot)
+    before = _zoom_level(window)
+    QApplication.sendEvent(window._view.viewport(), _wheel_event(0))
+    assert _zoom_level(window) == pytest.approx(before)
+
+
+def test_zoom_is_proportional_to_how_far_you_scroll(qtbot):
+    """A mouse notch is 120; a trackpad sends many small fractions of one.
+    Ten tenth-notches must zoom exactly as much as one notch — not ten
+    full steps."""
+    from landscape.editor import SceneGraphicsView
+
+    window = _open_editor(qtbot)
+    before = _zoom_level(window)
+    for _ in range(10):
+        QApplication.sendEvent(window._view.viewport(), _wheel_event(12))
+    assert _zoom_level(window) == pytest.approx(before * SceneGraphicsView.ZOOM_PER_TICK, rel=1e-6)
+
+    for _ in range(10):
+        QApplication.sendEvent(window._view.viewport(), _wheel_event(-12))
+    assert _zoom_level(window) == pytest.approx(before, rel=1e-6)
+
+
+def test_paver_joints_are_hidden_while_zooming_and_come_back_after(qtbot, tmp_path):
+    """The brick outlines are half the cost of a redraw; skipping them
+    (and edge smoothing) mid-gesture keeps zoom smooth."""
+    from PySide6.QtGui import QPainter
+
+    window = _open_paver_editor(qtbot, tmp_path)
+    patio = next(i for i in window._view.scene().items() if i.data(0) == "patio")
+    assert patio.joints_item.isVisible()
+
+    QApplication.sendEvent(window._view.viewport(), _wheel_event(120))
+
+    assert not patio.joints_item.isVisible()
+    assert not window._view.renderHints() & QPainter.Antialiasing
+    qtbot.waitUntil(lambda: patio.joints_item.isVisible(), timeout=2000)
+    assert window._view.renderHints() & QPainter.Antialiasing
