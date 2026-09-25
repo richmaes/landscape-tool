@@ -233,22 +233,25 @@ failing. Fixed by printing `landscape render: wrote <path>` on success;
 
 ## M6 — Renderer: hand-drawn pastel art mode
 
-- [ ] Research and prototype texture techniques before committing to an approach:
-  - [ ] Edge wobble — noise-perturbed boundaries so lines read as hand-drawn
-  - [ ] Hatching and cross-hatching, direction varying by material
-  - [ ] Stippling / dot density for gravel and mulch
-  - [ ] Watercolor-style washes with soft, uneven edges and color pooling
+`src/landscape/render_art.py` — a raster watercolor-and-pencil pipeline (paper → shadows → per-object washes → pencil textures → pencil outlines → paper grain), composited with a *multiply* blend like transparent pigment. Lower washes are *lifted* under an upper object (as a painter leaves an area unpainted) — without that, overlapping washes stacked into mud (the first prototype's biggest flaw). Unassigned materials are left as paper with a pencil outline rather than flat mode's magenta fallback.
+
+- [x] Research and prototype texture techniques before committing to an approach — two wash techniques prototyped on the real backyard and compared at 300 DPI (`out/m6-prototypes/comparison.png`): **A, diffuse** (wobbled masks, soft blur, pigment pooling at the rim, granulation — reads as watercolor) and **B, layered** (Tyler Hobbs-style recursive polygon deformation, many hard translucent glazes — crisper, more marker/gouache). Rich's call (2026-09-24): keep both, `ArtStyle.wash = "diffuse"` (default) or `"layered"`; lighter pencil work (`ArtStyle.pencil`, default 0.65).
+  - [x] Edge wobble — noise-perturbed boundaries so lines read as hand-drawn (`_wobble`: densify, then push vertices along a smooth seeded sinusoid field; rings re-closed explicitly — vectorised maths gave a ring's identical endpoints last-bit differences, which GEOS rejects)
+  - [~] Hatching and cross-hatching, direction varying by material — hatching done (`texture: {style: hatch, direction, spacing}`); cross-hatching not yet
+  - [x] Stippling / dot density for gravel and mulch — `texture: {style: stipple, density}`
+  - [x] Watercolor-style washes with soft, uneven edges and color pooling
   - [ ] Canopy rendering — scalloped/blobby tree crowns rather than plain circles
-  - [ ] Water — ripple lines, edge darkening
-  - [ ] Paper grain and slight color bleed as a global overlay
-- [ ] Per-material texture recipe — composable generators rather than one hardcoded look
-- [ ] Clip every texture to its region while letting edges overshoot slightly (that overshoot is what sells the hand-drawn look)
-- [ ] Seeded randomness so a given scene reproduces exactly
-- [ ] Resolution independence — textures scale with target DPI without turning to mush
-- [ ] Drop shadows / soft elevation cues for structures
-- [ ] Performance pass — texture generation is the likely bottleneck; profile and cache
-- [ ] Background: PNG texture images (real paper/canvas photos or scans), not just a procedural "paper grain overlay" — raised alongside the M8 editing-view redesign (2026-09-22); this is squarely a high-fidelity-render concern, deliberately *not* done to the plain editing canvas, which stays flat fills + lines on purpose
-- [ ] "Simulate watercolor pastel drawings" for the full render, explicitly — the "Watercolor-style washes" bullet above already covers the technique; noting Rich's own framing here since it's the north star for how this whole milestone should look and feel, not just one texture among several
+  - [x] Water — ripple lines, edge darkening — `texture: {style: ripple}` plus the wash's rim pooling
+  - [x] Paper grain and slight color bleed as a global overlay — procedural (two noise scales); bleed comes from the washes' soft edges
+- [x] Per-material texture recipe — composable generators rather than one hardcoded look — `texture:` in `assets/materials.yaml` is now consumed (`hatch | stipple | ripple | none`)
+- [x] Clip every texture to its region while letting edges overshoot slightly (that overshoot is what sells the hand-drawn look) — hatching clipped to the region grown by 0.06 ft
+- [x] Seeded randomness so a given scene reproduces exactly — `ArtStyle.seed`; byte-identical re-renders tested
+- [x] Resolution independence — textures scale with target DPI without turning to mush — every size in feet or inches; a 2x-DPI render downsampled matches the 1x one (tested)
+- [x] Drop shadows / soft elevation cues for structures — objects on `ArtStyle.shadow_layers` (default `structures`) cast a soft offset shadow
+- [ ] Performance pass — texture generation is the likely bottleneck; profile and cache — measured: backyard at 300 DPI takes 20–35 s (fine at preview DPIs: <1 s at 60 DPI)
+- [ ] Background: PNG texture images (real paper/canvas photos or scans), not just a procedural "paper grain overlay" — raised alongside the M8 editing-view redesign (2026-09-22); this is squarely a high-fidelity-render concern, deliberately *not* done to the plain editing canvas, which stays flat fills + lines on purpose. Rich (2026-09-24): procedural for now, with a style setting that accepts a paper image whenever he has scans.
+- [~] "Simulate watercolor pastel drawings" for the full render, explicitly — the north star; the diffuse wash is the closest so far. Expect iteration by eye.
+- [ ] Art mode in exports (CLI `--mode art`, export recipes, the editor's Export dialog) and an editor **Design / Art preview** toggle (Rich, 2026-09-24)
 
 ## M7 — Export  *(complete except art-mode raster embedding, blocked on M6)*
 
