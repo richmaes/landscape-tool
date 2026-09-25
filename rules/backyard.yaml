@@ -35,7 +35,9 @@ rules:
 
   - id: no_unintended_overlaps
     type: no_overlap_unless_stacked
-    ignore_materials: [sand_tbd]
+    # ground surfaces other objects legitimately stand on: the sand, and the
+    # brick patio and border (fences are built across them)
+    ignore_materials: [sand_tbd, pavers_light_grey, pavers_red, pavers_red_blend, pavers_tan, pavers_charcoal]
     exceptions:
       - [hot_tub, hot_tub_pad]         # the tub sits on its pad by design
       - [deck_nw_wood, deck_nw_green]

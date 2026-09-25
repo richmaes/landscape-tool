@@ -101,7 +101,7 @@ proposed = to be built; n/a = annotation.
 - Water feature form - hexagons are placeholders only.
 - Fence heights: existing vinyl, and the new property-division fence.
 - Existing vinyl fence x extent (currently full page width as a placeholder).
-- Paver spec: size, pattern, colour. Largest surface in the render.
+- ~~Paver spec: size, pattern, colour.~~ — decided 2026-09-25: light grey, 45° herringbone, with a single sailor-course border around the sand circle; size assumed standard 8 x 4 in (unconfirmed). The live scene's page grew to 36 x 36 ft for the patio, shifting everything +6 ft — coordinates in this file are still the PDF's own 24 ft frame.
 - Edge treatment where sand/burnable meets pavers.
 - Is page-up north?
 - Full site extent, house position, and what else is in the yard.
