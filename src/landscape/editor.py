@@ -151,6 +151,7 @@ class EditableItem(QGraphicsPathItem):
         # them (the hot tub inside the ground-cover box, the firepit
         # inside its keepout). See `shape()`.
         self._outline_hit_width = outline_hit_width
+        self.joints_item: QGraphicsPathItem | None = None  # paver joints, if the material is a paver
         # Shapely's true centroid (in this item's Qt/y-flipped coordinates),
         # not the bounding-box center: `geometry._apply_transform` pivots
         # scale/rotation about `origin="centroid"`, and for any asymmetric
@@ -499,6 +500,7 @@ def _add_material_item(
     on_moved: Callable[[str], None] | None = None,
     on_drag_start: Callable[[], None] | None = None,
     on_drag_end: Callable[[], None] | None = None,
+    units: str = "ft",
 ) -> QGraphicsPathItem:
     """`line_width` (scene units) is deliberately the same fixed, dark
     charcoal outline for every shape here, regardless of the material's
@@ -521,8 +523,29 @@ def _add_material_item(
 
     item.setBrush(QBrush(fill) if is_area else QBrush(Qt.NoBrush))
     item.setPen(QPen(LINE_COLOR, line_width))
+    joints = _paver_joints_path(obj.geometry, material, obj.pattern, page_height, units)
+    if joints is not None:
+        joints_item = QGraphicsPathItem(joints, item)
+        joints_item.setPen(QPen(QColor(material.color).darker(135), line_width * 0.25))
+        joints_item.setAcceptedMouseButtons(Qt.NoButton)
+        if isinstance(item, EditableItem):
+            item.joints_item = joints_item
     scene.addItem(item)
     return item
+
+
+def _paver_joints_path(geom: BaseGeometry, material: Material, pattern: str | None, page_height: float,
+                       units: str) -> QPainterPath | None:
+    """Every brick outline of a paver object (see pavers.py), or None."""
+    from shapely.geometry import MultiPolygon
+
+    from .pavers import bricks_for, paver_spec
+
+    spec = paver_spec(material, pattern, units)
+    if spec is None:
+        return None
+    bricks = bricks_for(geom, spec)
+    return _path_for_geometry(MultiPolygon(bricks), page_height) if bricks else None
 
 
 def _add_annotation_item(
@@ -763,7 +786,8 @@ def build_graphics_scene(
         material = materials.resolve(obj.material)
         scene_object = doc.get(obj.id) if doc is not None else None
         _add_material_item(
-            gscene, obj, material, page_height, line_width, scene_object, on_object_moved, on_drag_start, on_drag_end
+            gscene, obj, material, page_height, line_width, scene_object, on_object_moved, on_drag_start, on_drag_end,
+            units=doc.units if doc is not None else "ft",
         )
 
     return gscene
@@ -1780,6 +1804,12 @@ class EditorWindow(QMainWindow):
         target.setRotation(0)
         target.setScale(1)
         target.setPath(_path_for_geometry(geom, page_height))
+        if target.joints_item is not None:  # re-lay the bricks for the new size/angle
+            resolved = self.session.resolved.get(target.scene_object.id)
+            material = self.session.materials.resolve(resolved.material)
+            joints = _paver_joints_path(geom, material, resolved.pattern, page_height, self.session.doc.units)
+            if joints is not None:
+                target.joints_item.setPath(joints)
         c = geom.centroid
         target.centroid = QPointF(c.x, page_height - c.y)
         self._place_selection_handles(target)

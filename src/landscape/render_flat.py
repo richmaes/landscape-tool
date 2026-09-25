@@ -103,6 +103,7 @@ def render_flat(
     materials: MaterialLibrary,
     page_height: float,
     show_annotations: bool = False,
+    units: str = "ft",
 ) -> None:
     """Issue the flat-mode draw calls onto an existing cairo context. The
     caller owns the surface and its lifecycle (create, `finish()`/save) —
@@ -137,11 +138,27 @@ def render_flat(
                 ctx.stroke()
             else:
                 ctx.new_path()
+            _draw_paver_joints(ctx, obj, material, page_height, units)
         else:
             _draw_line_path(ctx, geom, page_height)
             ctx.set_source_rgb(*_rgb01(_edge_color(material)))
             ctx.set_line_width(material.edge.get("weight") or 1.0)
             ctx.stroke()
+
+
+def _draw_paver_joints(ctx: cairo.Context, obj: ResolvedObject, material: Material, page_height: float, units: str) -> None:
+    """For a paver material, every brick's outline in a darker shade of its
+    color (see pavers.py)."""
+    from .pavers import bricks_for, paver_spec
+
+    spec = paver_spec(material, obj.pattern, units)
+    if spec is None:
+        return
+    for brick in bricks_for(obj.geometry, spec):
+        _draw_polygon_path(ctx, brick, page_height)
+    ctx.set_source_rgb(*_rgb01(_darken(material.color, 0.72)))
+    ctx.set_line_width(spec.width * 0.06)  # joints about 1/4 in wide on a 4 in brick
+    ctx.stroke()
 
 
 def _draw_annotation(ctx: cairo.Context, obj: ResolvedObject, page_height: float, label: str | None = None) -> None:
@@ -393,7 +410,7 @@ def _draw_page(
     ctx.save()
     ctx.rectangle(0, 0, doc.page_width, doc.page_height)
     ctx.clip()
-    render_flat(ctx, scene, materials, doc.page_height, **kwargs)
+    render_flat(ctx, scene, materials, doc.page_height, units=doc.units, **kwargs)
     _draw_overlays(ctx, doc, scene, materials, show_legend, scale_indicator)
     ctx.restore()
     if scale_bar or north_arrow:

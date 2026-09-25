@@ -112,3 +112,82 @@ def test_paver_spec_reads_the_recipe_in_scene_units():
     assert paver_spec(lib.materials["pavers_red_blend"], None, "ft").variation > paver_spec(
         lib.materials["pavers_red"], None, "ft"
     ).variation  # a blend varies brick to brick more than a single colour
+
+
+# --- drawing the bricks ------------------------------------------------------------------
+
+import numpy as np  # noqa: E402
+from PIL import Image  # noqa: E402
+
+from landscape.geometry import ResolvedObject, ResolvedScene  # noqa: E402
+from landscape.render_art import render_art_image  # noqa: E402
+from landscape.render_flat import render_scene_to_png  # noqa: E402
+from landscape.schema import SceneDocument  # noqa: E402
+
+
+def _patio(material="pavers_light_grey", pattern="running_bond"):
+    doc = SceneDocument(page_width=4, page_height=4, scale=36)
+    obj = ResolvedObject("patio", box(0, 0, 4, 4), material, "ground", 0, False, None, pattern)
+    return doc, ResolvedScene(objects=[obj]), load_materials(DEFAULT_MATERIALS)
+
+
+def _row_brightness(arr, y_ft, ppu):
+    """Mean brightness of one pixel row at height y (ft, +y north), away
+    from the page edges."""
+    row = int(round((4 - y_ft) * ppu))
+    return arr[row, int(0.5 * ppu) : int(3.5 * ppu)].mean()
+
+
+def test_flat_render_draws_the_joints(tmp_path):
+    """Running bond: every row boundary (a multiple of the 4 in width) is a
+    joint, the middle of each row is brick."""
+    doc, scene, lib = _patio()
+    out = tmp_path / "p.png"
+    render_scene_to_png(doc, scene, lib, out, dpi=288)  # 144 px per ft
+    arr = np.asarray(Image.open(out).convert("L"), float)
+    joint, middle = _row_brightness(arr, 3 * W, 144), _row_brightness(arr, 2.5 * W, 144)
+    assert joint < middle - 15
+
+
+def test_art_render_draws_the_joints():
+    doc, scene, lib = _patio()
+    arr = np.asarray(render_art_image(doc, scene, lib, dpi=288).convert("L"), float)
+    joint, middle = _row_brightness(arr, 3 * W, 144), _row_brightness(arr, 2.5 * W, 144)
+    assert joint < middle - 5
+
+
+def test_art_bricks_vary_in_tone_and_a_blend_varies_most():
+    def brick_tones(material):
+        doc, scene, lib = _patio(material, "running_bond")
+        arr = np.asarray(render_art_image(doc, scene, lib, dpi=144).convert("L"), float)  # 72 px per ft
+        # sample the centre of each brick in one row (row middle y = 2.5 W)
+        row = int(round((4 - 2.5 * W) * 72))
+        centres = [int(round((x + L / 2) * 72)) for x in np.arange(0.5, 3.4, L)]
+        return np.array([arr[row - 2 : row + 3, c - 3 : c + 4].mean() for c in centres])
+
+    red, blend = brick_tones("pavers_red"), brick_tones("pavers_red_blend")
+    assert red.std() > 0.5  # not one flat wash
+    assert blend.std() > red.std() * 1.5
+
+
+def test_the_design_canvas_shows_the_joints(qtbot, tmp_path):
+    from pathlib import Path
+
+    from landscape.editor import EditorWindow
+    from landscape.pavers import paver_bricks
+
+    scene = tmp_path / "patio.yaml"
+    scene.write_text(
+        "page_width: 4\npage_height: 4\nscale: 36\nobjects:\n"
+        "  - id: patio\n    type: rect\n    x: 0\n    y: 0\n    width: 4\n    height: 4\n"
+        "    material: pavers_light_grey\n    pattern: basketweave\n"
+    )
+    window = EditorWindow(materials_path=DEFAULT_MATERIALS)
+    qtbot.addWidget(window)
+    window.load_scene(scene)
+
+    patio = next(i for i in window._view.scene().items() if i.data(0) == "patio")
+    joints = patio.joints_item
+    assert joints is not None and joints.parentItem() is patio
+    expected = len(paver_bricks(box(0, 0, 4, 4), "basketweave", L, W))
+    assert joints.path().elementCount() >= expected * 4  # every brick outlined

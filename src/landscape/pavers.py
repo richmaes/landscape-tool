@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from functools import lru_cache
 
 import numpy as np
 import shapely
@@ -61,6 +62,18 @@ def paver_spec(material, pattern_override: str | None, units: str) -> PaverSpec 
         width=float(width_in) / per_unit,
         variation=float(recipe.get("variation", 0.05)),
     )
+
+
+def bricks_for(geom: BaseGeometry, spec: PaverSpec) -> list[Polygon]:
+    """`paver_bricks` for a drawn object, cached: the canvas redraws on
+    every edit, and a 36 ft herringbone patio is ~6,000 bricks. Keyed by
+    the geometry's bytes, so any change to the shape re-lays it."""
+    return list(_cached_bricks(geom.wkb, spec.pattern, spec.length, spec.width))
+
+
+@lru_cache(maxsize=32)
+def _cached_bricks(wkb: bytes, pattern: str, length: float, width: float) -> tuple[Polygon, ...]:
+    return tuple(paver_bricks(shapely.from_wkb(wkb), pattern, length, width))
 
 
 def paver_bricks(region: BaseGeometry, pattern: str, length: float, width: float) -> list[Polygon]:

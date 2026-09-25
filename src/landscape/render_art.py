@@ -401,6 +401,29 @@ def _leaf_clumps(geom: BaseGeometry, rng: np.random.Generator) -> list[BaseGeome
     return arcs
 
 
+def _paint_pavers(canvas: _Canvas, obj: ResolvedObject, material: Material, crop, style: ArtStyle, rng,
+                  units: str) -> None:
+    """Over a paver material's wash: each brick a slightly different tone
+    (by the material's `variation` — a red blend far more than a single
+    red), then light pencil joints."""
+    from .pavers import bricks_for, paver_spec
+
+    spec = paver_spec(material, obj.pattern, units)
+    if spec is None:
+        return
+    bricks = bricks_for(obj.geometry, spec)
+    if not bricks:
+        return
+    surface, ctx = canvas._context(crop)
+    for brick, tone in zip(bricks, rng.uniform(0, 1, len(bricks))):
+        canvas._trace_area(ctx, brick)
+        ctx.set_source_rgba(0, 0, 0, float(tone))
+        ctx.fill()
+    canvas.multiply(crop, canvas._read(surface) * spec.variation * 2.0, _pigment(material))
+    joints = canvas.stroke_mask([b.exterior for b in bricks], crop, spec.width * 0.05, 0.45 * style.pencil)
+    canvas.multiply(crop, joints, np.clip(_rgb(material.color) * 0.6, 0, 1))
+
+
 def _hatch_lines(geom, direction_deg: float, spacing: float, overshoot: float) -> list[BaseGeometry]:
     """Parallel lines across the region at `direction_deg`, clipped to it
     grown by `overshoot` — letting strokes run slightly past the edge is
@@ -531,6 +554,7 @@ def render_art_image(
         if is_area and material.id != _FALLBACK_ID:
             canvas.multiply(crop, wash(canvas, geom, crop, style, rng, clouds), _pigment(material))
             _texture(canvas, obj, material, crop, style, rng)
+            _paint_pavers(canvas, obj, material, crop, style, rng, doc.units)
 
         # pencil outline: two slightly different passes, like a sketched line
         outline = geom.boundary if is_area else geom
