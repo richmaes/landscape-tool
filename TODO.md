@@ -253,7 +253,7 @@ failing. Fixed by printing `landscape render: wrote <path>` on success;
 ## M7 — Export
 
 - [x] PNG export at configurable DPI with correct physical sizing — `render_scene_to_png(..., dpi=)` / `landscape render --dpi N` (replacing the old `dpi_scale` multiplier; default 72 = the old output, one pixel per point). The print size is the scene's own scale — 36 pt/ft at 72 pt/in, so the 24 ft backyard is a 12 in square, the source PDF's 1/2 in = 1 ft — and the DPI is written into the PNG's pHYs metadata (via Pillow; cairo can't) so it actually prints at that size instead of whatever DPI an app assumes. Not yet exposed in the editor's File > Export (it exports at 72 DPI).
-- [ ] SVG export for flat mode
+- [x] SVG export for flat mode — existed since M5 (`render_scene_to_svg`), but checking it for M7 found a real sizing bug: cairo wrote a unitless `width="864"`, which SVG reads as CSS pixels (96/in), so the 12 in drawing printed/imported at 9 in. Now sized in points (`SVGSurface.set_document_unit(PT)` → `width="864pt"`), matching the PDF and the PNG's recorded DPI. Verified vector-only: no embedded raster data (cairo's zero-size `<image>` mask placeholders carry no pixels).
 - [ ] PDF export at print scale, with a scale bar and north arrow
 - [ ] Embed raster fills in vector output for art mode (document the hybrid honestly)
 - [ ] Batch export — multiple modes/variants from one scene in a single run

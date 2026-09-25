@@ -116,6 +116,34 @@ def test_render_to_svg_is_valid_svg(tmp_path):
     assert out.stat().st_size > 1000
 
 
+
+def test_svg_declares_its_print_size_in_points(tmp_path):
+    """A unitless `width="864"` means 864 CSS pixels (96 per inch) in SVG,
+    so the drawing printed/imported at 9 in instead of its true 12 in — a
+    real bug, found checking M7's "SVG export" item. Sized in points, it
+    matches the PDF and the PNG's recorded DPI: `doc.scale` pt per foot."""
+    import xml.etree.ElementTree as ET
+
+    doc = load_scene(EXAMPLE_SCENE)
+    out = tmp_path / "scene.svg"
+    render_scene_to_svg(doc, resolve_scene(doc), load_materials(DEFAULT_MATERIALS), out)
+
+    root = ET.parse(out).getroot()
+    assert root.get("width") == f"{doc.page_width * doc.scale:g}pt"
+    assert root.get("height") == f"{doc.page_height * doc.scale:g}pt"
+
+
+def test_svg_is_vector_only(tmp_path):
+    """No embedded raster data. (cairo does emit empty, zero-size
+    `<image>` placeholders as mask sources — those carry no pixels.)"""
+    doc = load_scene(EXAMPLE_SCENE)
+    out = tmp_path / "scene.svg"
+    render_scene_to_svg(doc, resolve_scene(doc), load_materials(DEFAULT_MATERIALS), out, show_legend=True)
+
+    content = out.read_text()
+    assert "data:image" not in content
+    assert "<path" in content
+
 def test_render_to_pdf_is_valid_pdf(tmp_path):
     doc = load_scene(EXAMPLE_SCENE)
     scene = resolve_scene(doc)

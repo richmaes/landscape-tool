@@ -195,8 +195,12 @@ def _draw_legend(ctx: cairo.Context, materials: list[Material], page_height: flo
 def render_scene_to_svg(
     doc: SceneDocument, scene: ResolvedScene, materials: MaterialLibrary, path: str | Path, **kwargs
 ) -> None:
+    """Vector-native SVG, sized in points (`width="864pt"`) so it prints and
+    imports at the drawing's true size — cairo's default is unitless, which
+    SVG reads as CSS pixels (96/in), shrinking a 12 in drawing to 9 in."""
     width, height = doc.page_width * doc.scale, doc.page_height * doc.scale
     surface = cairo.SVGSurface(str(path), width, height)
+    surface.set_document_unit(cairo.SVGUnit.PT)
     ctx = cairo.Context(surface)
     ctx.scale(doc.scale, doc.scale)
     render_flat(ctx, scene, materials, doc.page_height, **kwargs)
