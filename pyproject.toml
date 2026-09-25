@@ -18,6 +18,7 @@ dependencies = [
     "pdfplumber>=0.11",
     "ruamel.yaml>=0.18",
     "PySide6>=6.6",
+    "pyvista>=0.49",  # M11 3D view: VTK-based rendering (large: VTK ~520 MB)
 ]
 
 [project.optional-dependencies]
