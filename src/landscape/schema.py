@@ -369,6 +369,7 @@ class SceneObject:
     definition: str | None = None  # when instancing a reusable `definitions` entry
     transform: Transform = field(default_factory=Transform)
     boolean: BooleanOp | None = None
+    pattern: str | None = None  # paver layout, overriding the material's default (see pavers.py)
 
 
 @dataclass

@@ -2520,3 +2520,41 @@ def test_export_dialog_offers_the_scale_indicator(qtbot, tmp_path, monkeypatch):
     dialog = _trigger_export(window, monkeypatch, tmp_path / "plan.png")
     assert dialog.scale_indicator_check.isChecked()
     assert dialog.options()["scale_indicator"] is True
+
+
+# --- Pattern choice for paver objects ------------------------------------------------
+
+
+def _open_paver_editor(qtbot, tmp_path) -> EditorWindow:
+    scene = tmp_path / "patio.yaml"
+    scene.write_text(
+        "page_width: 12\npage_height: 12\nscale: 36\nobjects:\n"
+        "  - id: patio\n    type: rect\n    x: 0\n    y: 0\n    width: 12\n    height: 12\n"
+        "    material: pavers_light_grey\n    z: 0\n"
+        "  - id: bed\n    type: rect\n    x: 4\n    y: 4\n    width: 4\n    height: 4\n    material: lawn\n    z: 1\n"
+    )
+    window = EditorWindow(materials_path=DEFAULT_MATERIALS)
+    qtbot.addWidget(window)
+    window.load_scene(scene)
+    return window
+
+
+def test_pattern_choice_appears_only_for_pavers(qtbot, tmp_path):
+    window = _open_paver_editor(qtbot, tmp_path)
+    _select_only(window, "patio")
+    assert window._panel.pattern_combo.isVisibleTo(window._panel)
+    assert window._panel.pattern_combo.currentData() == "herringbone_45"  # the material's default
+
+    _select_only(window, "bed")
+    assert not window._panel.pattern_combo.isVisibleTo(window._panel)
+
+
+def test_choosing_a_pattern_updates_the_object(qtbot, tmp_path):
+    window = _open_paver_editor(qtbot, tmp_path)
+    _select_only(window, "patio")
+
+    window._panel.pattern_combo.setCurrentIndex(window._panel.pattern_combo.findData("running_bond"))
+
+    assert window.session.doc.get("patio").pattern == "running_bond"
+    assert window._selected_id == "patio"  # still selected after the rebuild
+    assert window._panel.pattern_combo.currentData() == "running_bond"

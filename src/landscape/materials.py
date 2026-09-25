@@ -36,6 +36,10 @@ class Material:
     color: str  # "#RRGGBB"
     texture: dict[str, Any] = field(default_factory=dict)
     edge: dict[str, Any] = field(default_factory=lambda: {"weight": 1.0, "color": None})
+    # Materials in one family (e.g. every paver color) are alternatives for
+    # the same surface, so the palette check doesn't compare them to each
+    # other — only to everything else.
+    family: str | None = None
 
 
 _FALLBACK = Material(id="__fallback__", name="Missing material", color=FALLBACK_COLOR)
@@ -68,6 +72,7 @@ def load_materials(path: str | Path) -> MaterialLibrary:
             color=mat_data["color"],
             texture=mat_data.get("texture", {}),
             edge=mat_data.get("edge", {"weight": 1.0, "color": None}),
+            family=mat_data.get("family"),
         )
     return MaterialLibrary(materials=materials)
 
@@ -110,6 +115,9 @@ def find_indistinguishable_pairs(
     close = []
     for i, a in enumerate(ids):
         for b in ids[i + 1 :]:
+            family = library.materials[a].family
+            if family is not None and family == library.materials[b].family:
+                continue  # alternatives for the same surface, never meant to be told apart side by side
             d = color_distance(library.materials[a].color, library.materials[b].color)
             if d < min_distance:
                 close.append((a, b, d))

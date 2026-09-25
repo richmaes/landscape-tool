@@ -18,6 +18,7 @@ Patterns (for 2:1 pavers, e.g. the standard 8 x 4 in):
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import numpy as np
 import shapely
@@ -27,6 +28,39 @@ from shapely.ops import split
 
 PATTERNS = ("herringbone_45", "herringbone_90", "running_bond", "basketweave", "sailor")
 DEFAULT_PATTERN = "herringbone_45"
+PATTERN_LABELS = {
+    "herringbone_45": "Herringbone 45°",
+    "herringbone_90": "Herringbone 90°",
+    "running_bond": "Running bond",
+    "basketweave": "Basketweave",
+    "sailor": "Sailor course (border)",
+}
+_INCHES_PER_UNIT = {"ft": 12.0, "in": 1.0, "yd": 36.0, "m": 1000 / 25.4}
+
+
+@dataclass
+class PaverSpec:
+    pattern: str
+    length: float  # scene units
+    width: float
+    variation: float  # brick-to-brick tone variation, 0..1
+
+
+def paver_spec(material, pattern_override: str | None, units: str) -> PaverSpec | None:
+    """How to lay `material` (None if it isn't a paver): its texture
+    recipe's brick size (inches) in scene units, and the object's own
+    `pattern` if it chose one, else the material's default."""
+    recipe = material.texture or {}
+    if recipe.get("style") != "pavers":
+        return None
+    length_in, width_in = recipe.get("brick", [8, 4])
+    per_unit = _INCHES_PER_UNIT.get(units, 12.0)
+    return PaverSpec(
+        pattern=pattern_override or recipe.get("pattern", DEFAULT_PATTERN),
+        length=float(length_in) / per_unit,
+        width=float(width_in) / per_unit,
+        variation=float(recipe.get("variation", 0.05)),
+    )
 
 
 def paver_bricks(region: BaseGeometry, pattern: str, length: float, width: float) -> list[Polygon]:

@@ -143,7 +143,17 @@ def _parse_object(obj_id: str, obj_data: Any, doc: SceneDocument) -> SceneObject
         definition=definition_ref,
         transform=parse_transform(obj_data.get("transform")),
         boolean=parse_boolean(obj_data.get("boolean")),
+        pattern=_parse_pattern(obj_data),
     )
+
+
+def _parse_pattern(obj_data: Any) -> str | None:
+    from .pavers import PATTERNS
+
+    pattern = obj_data.get("pattern")
+    if pattern is not None and pattern not in PATTERNS:
+        raise SchemaError(f"unknown paver pattern '{pattern}' (use one of: {', '.join(PATTERNS)})")
+    return pattern
 
 
 def _require_number(raw: Any, key: str) -> float:

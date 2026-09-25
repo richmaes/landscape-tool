@@ -675,3 +675,24 @@ def test_rewriting_an_existing_transform_keeps_the_blank_line(tmp_path):
     block = _block_after(scene.read_text(), "firepit_keepout")
     assert "rotation: 15" in block
     assert block.endswith("\n\n") and not block.endswith("\n\n\n")
+
+
+def test_set_pattern_is_saved_and_undoable(tmp_path):
+    from landscape.scene_io import load_scene
+
+    scene = tmp_path / "s.yaml"
+    scene.write_text(
+        "page_width: 10\npage_height: 10\nscale: 36\nobjects:\n"
+        "  - id: patio\n    type: rect\n    x: 0\n    y: 0\n    width: 10\n    height: 10\n"
+        "    material: pavers_light_grey\n"
+    )
+    session = EditorSession(DEFAULT_MATERIALS)
+    session.load(scene)
+
+    session.set_pattern("patio", "basketweave")
+
+    assert session.resolved.get("patio").pattern == "basketweave"
+    session.save()
+    assert load_scene(scene).get("patio").pattern == "basketweave"
+    session.undo()
+    assert session.doc.get("patio").pattern is None

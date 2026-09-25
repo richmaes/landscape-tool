@@ -83,3 +83,44 @@ materials:
     color: "#E8DCC0"
     texture: {style: none}
     edge: {weight: 0.5, color: null}
+
+  # Pavers (art/flat texture style `pavers`). One material per color, all in
+  # the `pavers` family; `brick` is [length, width] in inches, `pattern` is
+  # the default layout (herringbone_45, herringbone_90, running_bond,
+  # basketweave, or sailor for a border course) and any object can choose
+  # its own with `pattern:`. `variation` is how much one brick's tone
+  # differs from the next — highest for the blend.
+  pavers_light_grey:
+    name: Pavers (light grey)
+    family: pavers
+    color: "#D2D4D6"
+    texture: {style: pavers, pattern: herringbone_45, brick: [8, 4], variation: 0.05}
+    edge: {weight: 0.5, color: null}
+
+  pavers_red:
+    name: Pavers (classic red)
+    family: pavers
+    color: "#C98A77"
+    texture: {style: pavers, pattern: herringbone_45, brick: [8, 4], variation: 0.06}
+    edge: {weight: 0.5, color: null}
+
+  pavers_red_blend:
+    name: Pavers (red blend)
+    family: pavers
+    color: "#C28470"
+    texture: {style: pavers, pattern: herringbone_45, brick: [8, 4], variation: 0.16}
+    edge: {weight: 0.5, color: null}
+
+  pavers_tan:
+    name: Pavers (tan)
+    family: pavers
+    color: "#E0CC8A"
+    texture: {style: pavers, pattern: herringbone_45, brick: [8, 4], variation: 0.06}
+    edge: {weight: 0.5, color: null}
+
+  pavers_charcoal:
+    name: Pavers (charcoal)
+    family: pavers
+    color: "#96989C"
+    texture: {style: pavers, pattern: herringbone_45, brick: [8, 4], variation: 0.05}
+    edge: {weight: 0.5, color: null}

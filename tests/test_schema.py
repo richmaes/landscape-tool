@@ -143,3 +143,31 @@ def test_primitive_to_raw_dict_points_are_plain_lists_not_tuples():
     raw = primitive_to_raw_dict(parse_primitive({"type": "polygon", "points": [[0, 0], [1, 1]]}))
     assert raw["points"] == [[0, 0], [1, 1]]
     assert all(isinstance(p, list) for p in raw["points"])
+
+
+def test_an_object_can_choose_a_paver_pattern(tmp_path):
+    from landscape.scene_io import load_scene
+
+    scene = tmp_path / "s.yaml"
+    scene.write_text(
+        "page_width: 10\npage_height: 10\nscale: 36\nobjects:\n"
+        "  - id: patio\n    type: rect\n    x: 0\n    y: 0\n    width: 10\n    height: 10\n"
+        "    material: pavers_light_grey\n    pattern: running_bond\n"
+    )
+    assert load_scene(scene).get("patio").pattern == "running_bond"
+
+
+def test_an_unknown_paver_pattern_is_a_schema_error_with_its_line(tmp_path):
+    import pytest
+
+    from landscape.scene_io import load_scene
+    from landscape.schema import SchemaError
+
+    scene = tmp_path / "s.yaml"
+    scene.write_text(
+        "page_width: 10\npage_height: 10\nscale: 36\nobjects:\n"
+        "  - id: patio\n    type: rect\n    x: 0\n    y: 0\n    width: 10\n    height: 10\n    pattern: zigzag\n"
+    )
+    with pytest.raises(SchemaError, match="pattern") as excinfo:
+        load_scene(scene)
+    assert excinfo.value.line == 5

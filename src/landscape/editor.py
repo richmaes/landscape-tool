@@ -984,6 +984,7 @@ class PropertiesPanel(QWidget):
 
     def __init__(self, materials: MaterialLibrary, parent: QWidget | None = None):
         super().__init__(parent)
+        self._materials = materials
         self.id_label = QLabel("—")
         self.size_label = QLabel("—")
         self.size_label.setToolTip("Actual size after scaling (updates live while resizing)")
@@ -996,6 +997,12 @@ class PropertiesPanel(QWidget):
         self.material_combo = QComboBox()
         for material_id, material in sorted(materials.materials.items(), key=lambda kv: kv[1].name):
             self.material_combo.addItem(_swatch_icon(material), material.name, userData=material_id)
+        from .pavers import PATTERN_LABELS
+
+        self.pattern_label = QLabel("Pattern")
+        self.pattern_combo = QComboBox()
+        for key, label in PATTERN_LABELS.items():
+            self.pattern_combo.addItem(label, key)
 
         self.relation_type_combo = QComboBox()
         self.relation_type_combo.addItem("(none)", None)
@@ -1024,6 +1031,7 @@ class PropertiesPanel(QWidget):
         layout.addRow("Rotation", self.rotation_spin)
         layout.addRow("Scale", self.scale_spin)
         layout.addRow("Material", self.material_combo)
+        layout.addRow(self.pattern_label, self.pattern_combo)
         layout.addRow("Relation", self.relation_type_combo)
         layout.addRow("Target", self.relation_target_combo)
         layout.addRow(self.relation_param1_label, self.relation_param1_spin)
@@ -1065,8 +1073,17 @@ class PropertiesPanel(QWidget):
             self.relation_param1_spin,
             self.relation_param2_spin,
         )
+        widgets = (*widgets, self.pattern_combo)
         for widget in widgets:
             widget.blockSignals(True)
+
+        from .pavers import paver_spec
+
+        spec = paver_spec(self._materials.resolve(obj.material), obj.pattern, "ft")
+        self.pattern_label.setVisible(spec is not None)
+        self.pattern_combo.setVisible(spec is not None)
+        if spec is not None:
+            self.pattern_combo.setCurrentIndex(self.pattern_combo.findData(spec.pattern))
 
         self.rotation_spin.setValue(obj.transform.rotation)
         self.scale_spin.setValue(obj.transform.scale)
@@ -1270,6 +1287,7 @@ class EditorWindow(QMainWindow):
         self._panel.rotation_spin.valueChanged.connect(self._on_rotation_changed)
         self._panel.scale_spin.valueChanged.connect(self._on_scale_changed)
         self._panel.material_combo.currentIndexChanged.connect(self._on_material_changed)
+        self._panel.pattern_combo.currentIndexChanged.connect(self._on_pattern_changed)
         self._panel.apply_relation_button.clicked.connect(self._on_apply_relation)
         self._panel.clear_relation_button.clicked.connect(self._on_clear_relation)
 
@@ -1801,6 +1819,11 @@ class EditorWindow(QMainWindow):
     def _on_scale_changed(self, value: float) -> None:
         if self._selected_id:
             self.session.set_scale(self._selected_id, value)
+            self._rebuild_scene()
+
+    def _on_pattern_changed(self, index: int) -> None:
+        if self._selected_id:
+            self.session.set_pattern(self._selected_id, self._panel.pattern_combo.itemData(index))
             self._rebuild_scene()
 
     def _on_material_changed(self, index: int) -> None:

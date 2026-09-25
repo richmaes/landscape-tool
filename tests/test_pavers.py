@@ -72,3 +72,43 @@ def test_patterns_are_listed_for_the_ui():
 def test_an_unknown_pattern_is_rejected():
     with pytest.raises(ValueError, match="pattern"):
         paver_bricks(box(0, 0, 1, 1), "cobblestone", L, W)
+
+
+# --- paver materials and the per-object pattern -------------------------------------
+
+from pathlib import Path  # noqa: E402
+
+from landscape.materials import find_indistinguishable_pairs, load_materials  # noqa: E402
+from landscape.pavers import paver_spec  # noqa: E402
+
+REPO = Path(__file__).parent.parent
+DEFAULT_MATERIALS = REPO / "assets" / "materials.yaml"
+PAVER_COLOURS = ["pavers_light_grey", "pavers_red", "pavers_red_blend", "pavers_tan", "pavers_charcoal"]
+
+
+def test_the_library_offers_paver_colours():
+    lib = load_materials(DEFAULT_MATERIALS)
+    for material_id in PAVER_COLOURS:
+        m = lib.materials[material_id]
+        assert m.texture["style"] == "pavers"
+        assert m.family == "pavers"
+
+
+def test_paver_colours_are_alternatives_but_stand_apart_from_other_materials():
+    """Two paver colours are never compared (they're alternatives for the
+    same surface), but each must stay distinguishable from every other
+    material — including the sand and concrete it sits next to."""
+    lib = load_materials(DEFAULT_MATERIALS)
+    assert find_indistinguishable_pairs(lib, min_distance=0.12) == []
+
+
+def test_paver_spec_reads_the_recipe_in_scene_units():
+    lib = load_materials(DEFAULT_MATERIALS)
+    spec = paver_spec(lib.materials["pavers_light_grey"], None, "ft")
+    assert spec.pattern == "herringbone_45"
+    assert (spec.length, spec.width) == pytest.approx((8 / 12, 4 / 12))
+    assert paver_spec(lib.materials["pavers_light_grey"], "basketweave", "ft").pattern == "basketweave"  # object wins
+    assert paver_spec(lib.materials["deck"], None, "ft") is None  # not a paver
+    assert paver_spec(lib.materials["pavers_red_blend"], None, "ft").variation > paver_spec(
+        lib.materials["pavers_red"], None, "ft"
+    ).variation  # a blend varies brick to brick more than a single colour

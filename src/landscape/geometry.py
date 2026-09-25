@@ -65,6 +65,7 @@ class ResolvedObject:
     z: int
     annotation: bool
     rule: str | None = None  # set for keepout objects
+    pattern: str | None = None  # the object's own paver pattern, if it chose one
 
 
 @dataclass
@@ -105,6 +106,7 @@ class ResolvedScene:
                         z=obj.z,
                         annotation=obj.annotation,
                         rule=obj.rule,
+                        pattern=obj.pattern,
                     )
                 )
         return ResolvedScene(objects=cropped)
@@ -133,6 +135,7 @@ def resolve_scene(doc: SceneDocument) -> ResolvedScene:
             z=obj.z,
             annotation=obj.annotation,
             rule=rules[obj.id],
+            pattern=obj.pattern,
         )
         for obj in doc.objects
     ]

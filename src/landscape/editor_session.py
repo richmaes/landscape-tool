@@ -232,6 +232,21 @@ class EditorSession:
         self.recompute()
         self.autosave()
 
+    def set_pattern(self, object_id: str, pattern: str) -> None:
+        """Choose a paver layout for one object (see `pavers.PATTERNS`),
+        overriding its material's default. Undoable; saved as `pattern:`."""
+        from .pavers import PATTERNS
+
+        if pattern not in PATTERNS:
+            raise ValueError(f"unknown paver pattern '{pattern}'")
+        self.push_undo()
+        self.doc.get(object_id).pattern = pattern
+        raw_obj = self.raw_objects.get(object_id)
+        if raw_obj is not None:
+            _set_keeping_trailing_gap(raw_obj, "pattern", pattern)
+        self.recompute()
+        self.autosave()
+
     def set_rotation(self, object_id: str, value: float) -> None:
         self.push_undo()
         self.doc.get(object_id).transform.rotation = value
