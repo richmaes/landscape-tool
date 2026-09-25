@@ -43,9 +43,34 @@ materials:
     texture: {style: none}
     edge: {weight: 0.75, color: null}
 
+  # Decking comes in a few wood colors (the `deck` family): alternatives for
+  # the same surface, so the palette check only compares them to other
+  # materials. All share the same hatch texture.
   deck:
-    name: Deck
+    name: Deck (natural)
+    family: deck
     color: "#E0B27A"
+    texture: {style: hatch, direction: 45}
+    edge: {weight: 1.0, color: null}
+
+  deck_dark:
+    name: Deck (dark wood)
+    family: deck
+    color: "#6F4A35"
+    texture: {style: hatch, direction: 45}
+    edge: {weight: 1.0, color: null}
+
+  deck_cedar:
+    name: Deck (cedar)
+    family: deck
+    color: "#CE8A5A"
+    texture: {style: hatch, direction: 45}
+    edge: {weight: 1.0, color: null}
+
+  deck_weathered:
+    name: Deck (weathered grey)
+    family: deck
+    color: "#BFB6A8"
     texture: {style: hatch, direction: 45}
     edge: {weight: 1.0, color: null}
 

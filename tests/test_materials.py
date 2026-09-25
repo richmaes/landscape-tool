@@ -92,3 +92,19 @@ def test_find_indistinguishable_pairs_detects_near_duplicates():
     assert len(close) == 1
     assert close[0][:2] == ("a", "b")
     assert close[0][2] == pytest.approx(color_distance("#B7D9A8", "#B8DAA9"))
+
+
+def test_decking_comes_in_several_wood_colours_including_a_darker_one():
+    """Rich asked for wood colour options for the decking, specifically a
+    darker wood. Same hatch texture as the original deck; alternatives in
+    one family, like the paver colours."""
+    from landscape.materials import _hex_to_rgb
+
+    lib = load_materials(DEFAULT_LIBRARY)
+    woods = ["deck", "deck_dark", "deck_cedar", "deck_weathered"]
+    for material_id in woods:
+        m = lib.materials[material_id]
+        assert m.family == "deck"
+        assert m.texture == lib.materials["deck"].texture
+    assert sum(_hex_to_rgb(lib.materials["deck_dark"].color)) < sum(_hex_to_rgb(lib.materials["deck"].color)) * 0.6
+    assert "dark" in lib.materials["deck_dark"].name.lower()
