@@ -1010,8 +1010,20 @@ class PropertiesPanel(QWidget):
         super().__init__(parent)
         self._materials = materials
         self.id_label = QLabel("—")
+        # Size: editable width x height (or one diameter) for shapes that can
+        # be reshaped directly; a read-only readout for anything else.
+        self.size_width = self._size_spin()
+        self.size_times = QLabel("×")
+        self.size_height = self._size_spin()
         self.size_label = QLabel("—")
         self.size_label.setToolTip("Actual size after scaling (updates live while resizing)")
+        size_row = QWidget()
+        size_layout = QHBoxLayout(size_row)
+        size_layout.setContentsMargins(0, 0, 0, 0)
+        for widget in (self.size_width, self.size_times, self.size_height, self.size_label):
+            size_layout.addWidget(widget)
+        self._size_row = size_row
+        self._show_size_widgets(editable=False, diameter=False)
         self.rotation_spin = QDoubleSpinBox()
         self.rotation_spin.setRange(-3600, 3600)
         self.rotation_spin.setSuffix("°")
@@ -1051,7 +1063,7 @@ class PropertiesPanel(QWidget):
 
         layout = QFormLayout(self)
         layout.addRow("Object", self.id_label)
-        layout.addRow("Size", self.size_label)
+        layout.addRow("Size", self._size_row)
         layout.addRow("Rotation", self.rotation_spin)
         layout.addRow("Scale", self.scale_spin)
         layout.addRow("Material", self.material_combo)
@@ -1062,6 +1074,7 @@ class PropertiesPanel(QWidget):
         layout.addRow(self.relation_param2_label, self.relation_param2_spin)
         layout.addRow(buttons)
         self.setEnabled(False)
+        self._lock_minimum_width()
         self._update_relation_field_visibility()
 
     def _update_relation_field_visibility(self) -> None:
@@ -1140,8 +1153,72 @@ class PropertiesPanel(QWidget):
             widget.blockSignals(False)
         self.setEnabled(True)
 
+    def _lock_minimum_width(self) -> None:
+        """Fix the panel's minimum width at its widest content — every row
+        that can appear (size boxes, pattern, relation fields) shown at
+        once. Otherwise showing one widens the panel, squeezes the canvas
+        beside it, and (zoom anchors on the view centre) slides the drawing
+        sideways every time the selection changes — a real bug."""
+        toggled = (
+            self.size_width, self.size_times, self.size_height, self.pattern_label, self.pattern_combo,
+            self.relation_target_combo, self.relation_param1_label, self.relation_param1_spin,
+            self.relation_param2_label, self.relation_param2_spin,
+        )
+        was_hidden = [w for w in toggled if w.isHidden()]
+        for widget in was_hidden:
+            widget.setVisible(True)
+        self.layout().activate()
+        self.setMinimumWidth(self.minimumSizeHint().width())
+        for widget in was_hidden:
+            widget.setVisible(False)
+
+    @staticmethod
+    def _size_spin() -> QDoubleSpinBox:
+        spin = QDoubleSpinBox()
+        spin.setRange(0.01, 10000)
+        spin.setDecimals(2)
+        spin.setSingleStep(0.25)
+        # commit on Enter / leaving the box / an arrow click, not per
+        # keystroke — typing "12" must not reshape the object to 1 ft first
+        spin.setKeyboardTracking(False)
+        spin.setToolTip("Type a new size to reshape the object in this direction (keeps its centre)")
+        return spin
+
+    def _show_size_widgets(self, editable: bool, diameter: bool) -> None:
+        self.size_width.setVisible(editable)
+        self.size_times.setVisible(editable and not diameter)
+        self.size_height.setVisible(editable and not diameter)
+        self.size_label.setVisible(not editable)
+
+    def show_size(self, dims, units: str, fallback_text: str) -> None:
+        """`dims` from `dimensions.object_dimensions` (already scaled), or
+        None to show `fallback_text` read-only."""
+        if dims is None:
+            self._show_size_widgets(editable=False, diameter=False)
+            self.size_label.setText(fallback_text)
+            return
+        self._show_size_widgets(editable=True, diameter=dims.diameter_only)
+        for spin, value in ((self.size_width, dims.width), (self.size_height, dims.height)):
+            spin.blockSignals(True)
+            spin.setSuffix(f" {units}")
+            spin.setEnabled(value is not None)
+            spin.setValue(value or 0.0)
+            spin.blockSignals(False)
+        self.size_width.setPrefix("⌀ " if dims.diameter_only else "")
+
+    def size_text(self) -> str:
+        """What the Size row currently says, as text (for tests and tooltips)."""
+        if self.size_label.isVisibleTo(self):
+            return self.size_label.text()
+        units = self.size_width.suffix().strip()
+        w, h = self.size_width.value(), self.size_height.value()
+        if self.size_height.isVisibleTo(self):
+            return f"{w:.2f} × {h:.2f} {units}"
+        return f"⌀ {w:.2f} {units}"
+
     def clear(self) -> None:
         self.id_label.setText("—")
+        self._show_size_widgets(editable=False, diameter=False)
         self.size_label.setText("—")
         self.setEnabled(False)
 
@@ -1312,6 +1389,8 @@ class EditorWindow(QMainWindow):
         self._panel.scale_spin.valueChanged.connect(self._on_scale_changed)
         self._panel.material_combo.currentIndexChanged.connect(self._on_material_changed)
         self._panel.pattern_combo.currentIndexChanged.connect(self._on_pattern_changed)
+        self._panel.size_width.valueChanged.connect(lambda v: self._on_size_edited("width", v))
+        self._panel.size_height.valueChanged.connect(lambda v: self._on_size_edited("height", v))
         self._panel.apply_relation_button.clicked.connect(self._on_apply_relation)
         self._panel.clear_relation_button.clicked.connect(self._on_clear_relation)
 
@@ -1819,8 +1898,38 @@ class EditorWindow(QMainWindow):
         `factor` — 1.0 normally, the in-progress ratio during a resize drag."""
         if not self._selected_id:
             return
+        from dataclasses import replace
+
+        from .dimensions import object_dimensions
+
+        dims = object_dimensions(self.session.doc.get(self._selected_id))
+        if dims is not None and factor != 1.0:
+            dims = replace(
+                dims,
+                width=dims.width * factor if dims.width else None,
+                height=dims.height * factor if dims.height else None,
+            )
         geom = self.session.resolved.get(self._selected_id).geometry
-        self._panel.size_label.setText(dimensions_text(geom, factor, self.session.doc.units))
+        self._panel.show_size(dims, self.session.doc.units, dimensions_text(geom, factor, self.session.doc.units))
+
+    def _on_size_edited(self, which: str, value: float) -> None:
+        """A width/height (or diameter) typed into the Size row: reshape the
+        object in that direction only, then rebuild so everything —
+        handles, joints, the readout — reflects the new shape."""
+        if not self._selected_id:
+            return
+        from .dimensions import object_dimensions
+
+        dims = object_dimensions(self.session.doc.get(self._selected_id))
+        if dims is not None and dims.diameter_only:
+            which = "width"  # one value; the resize treats it as the diameter
+        try:
+            self.session.set_dimensions(self._selected_id, **{which: value})
+        except ValueError as exc:
+            self.statusBar().showMessage(f"Can't resize: {exc}")
+            self._show_selected_size()
+            return
+        self._rebuild_scene()
 
     def _on_handle_resized(self, value: float) -> None:
         if not self._selected_id:

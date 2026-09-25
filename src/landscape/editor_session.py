@@ -16,7 +16,7 @@ import copy
 from pathlib import Path
 from typing import Any, Callable
 
-from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 from .geometry import ResolvedScene, resolve_scene
 from .materials import MaterialLibrary, load_materials
@@ -84,6 +84,34 @@ def _attach_trailing_comment(node: CommentedMap, comment: list | None) -> None:
         _attach_trailing_comment(value, comment)
         return
     node.ca.items.setdefault(last_key, [None, None, None, None])[2] = comment
+
+
+def _write_changed_fields(node: Any, data: dict[str, Any]) -> None:
+    """Copy a primitive's fields into its raw YAML node, touching only the
+    ones whose value actually changed (so formatting and comments on the
+    rest survive). Point lists are written as compact flow lists, like
+    hand-written ones; a keepout's nested `shape` is updated in place."""
+    for key, value in data.items():
+        if key == "type":
+            continue
+        current = node.get(key)
+        if isinstance(value, dict):
+            if isinstance(current, dict):
+                _write_changed_fields(current, value)
+            continue
+        if key not in node or current == value:
+            continue  # absent fields keep their defaults; unchanged ones stay as written
+        if isinstance(value, list):
+            seq = CommentedSeq([_flow_seq(p) if isinstance(p, list) else p for p in value])
+            seq.fa.set_flow_style()
+            value = seq
+        node[key] = value
+
+
+def _flow_seq(items: list) -> CommentedSeq:
+    seq = CommentedSeq(items)
+    seq.fa.set_flow_style()
+    return seq
 
 
 def _set_keeping_trailing_gap(node: CommentedMap, key: str, value: Any) -> None:
@@ -229,6 +257,25 @@ class EditorSession:
         self.push_undo()
         setattr(self.doc, name, Placement(x=round(x, 3), y=round(y, 3)))
         self.raw[name] = CommentedMap(x=round(x, 3), y=round(y, 3))
+        self.recompute()
+        self.autosave()
+
+    def set_dimensions(self, object_id: str, width: float | None = None, height: float | None = None) -> None:
+        """Reshape an object to `width` and/or `height` (scene units, after
+        its scale — what the properties panel shows), independently rather
+        than by uniform scale, keeping its centre in place (see
+        `dimensions.py`). Undoable; only the primitive fields that actually
+        change are rewritten in the YAML. Raises ValueError if the object
+        can't be resized this way."""
+        from .dimensions import resized_primitive
+
+        obj = self.doc.get(object_id)
+        new = resized_primitive(obj, width, height)
+        self.push_undo()
+        obj.primitive = new
+        raw_obj = self.raw_objects.get(object_id)
+        if raw_obj is not None:
+            _write_changed_fields(raw_obj, primitive_to_raw_dict(new))
         self.recompute()
         self.autosave()
 

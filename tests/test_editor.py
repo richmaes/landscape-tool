@@ -2360,14 +2360,14 @@ def test_dimensions_text_describes_rects_circles_and_lines():
 def test_selecting_an_object_shows_its_size(qtbot):
     window = _open_editor(qtbot)
     _select_only(window, "shed")  # a 6 x 4 ft rect, rotated 5 degrees
-    assert window._panel.size_label.text() == "6.00 × 4.00 ft"
+    assert window._panel.size_text() == "6.00 × 4.00 ft"
 
 
 def test_size_follows_a_scale_edit(qtbot):
     window = _open_editor(qtbot)
     _select_only(window, "shed")
     window._panel.scale_spin.setValue(1.5)
-    assert window._panel.size_label.text() == "9.00 × 6.00 ft"
+    assert window._panel.size_text() == "9.00 × 6.00 ft"
 
 
 def test_size_updates_live_while_dragging_the_resize_handle(qtbot):
@@ -2381,16 +2381,16 @@ def test_size_updates_live_while_dragging_the_resize_handle(qtbot):
 
     preview_scale = resize_handle._final_value
     assert preview_scale != pytest.approx(1.0)
-    assert window._panel.size_label.text() == f"{6 * preview_scale:.2f} × {4 * preview_scale:.2f} ft"
+    assert window._panel.size_text() == f"{6 * preview_scale:.2f} × {4 * preview_scale:.2f} ft"
     resize_handle.end_drag()
-    assert window._panel.size_label.text() == f"{6 * preview_scale:.2f} × {4 * preview_scale:.2f} ft"
+    assert window._panel.size_text() == f"{6 * preview_scale:.2f} × {4 * preview_scale:.2f} ft"
 
 
 def test_size_clears_when_nothing_is_selected(qtbot):
     window = _open_editor(qtbot)
     _select_only(window, "shed")
     window._view.scene().clearSelection()
-    assert window._panel.size_label.text() == "—"
+    assert window._panel.size_text() == "—"
 
 
 # --- Legend box and scale indicator on the design canvas ----------------------------
@@ -2558,3 +2558,78 @@ def test_choosing_a_pattern_updates_the_object(qtbot, tmp_path):
     assert window.session.doc.get("patio").pattern == "running_bond"
     assert window._selected_id == "patio"  # still selected after the rebuild
     assert window._panel.pattern_combo.currentData() == "running_bond"
+
+
+
+# --- typing a new size ----------------------------------------------------------------
+
+
+def test_typing_a_width_reshapes_only_that_dimension(qtbot):
+    """Non-uniform: the shed gets wider, its height and scale stay, and its
+    centre doesn't move."""
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    centre_before = window.session.resolved.get("shed").geometry.centroid
+
+    window._panel.size_width.setValue(9)
+
+    shed = window.session.doc.get("shed")
+    assert (shed.primitive.width, shed.primitive.height, shed.transform.scale) == (9, 4, 1.0)
+    centre_after = window.session.resolved.get("shed").geometry.centroid
+    assert centre_after.distance(centre_before) < 1e-6
+    assert window._selected_id == "shed" and window._panel.size_text() == "9.00 × 4.00 ft"
+    assert window.session.dirty
+
+
+def test_typing_a_height_is_one_undo_step(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    window._panel.size_height.setValue(7)
+    window._on_undo()
+    assert window.session.doc.get("shed").primitive.height == 4
+
+
+def test_typed_size_is_after_scale(qtbot):
+    """The boxes show the size as drawn; typing into them means the same."""
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    window._panel.scale_spin.setValue(2.0)  # the shed now shows as 12 x 8
+    window._panel.size_width.setValue(10)
+    assert window.session.doc.get("shed").primitive.width == 5
+    assert window._panel.size_text() == "10.00 × 8.00 ft"
+
+
+def test_size_boxes_only_commit_when_the_edit_is_finished(qtbot):
+    """Typing '12' must not reshape the object to 1 ft first."""
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    assert not window._panel.size_width.keyboardTracking()
+
+
+def test_circles_get_a_single_diameter_box(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "site_circle")
+    panel = window._panel
+    assert panel.size_width.isVisibleTo(panel) and not panel.size_height.isVisibleTo(panel)
+    assert panel.size_width.prefix().startswith("⌀")
+    panel.size_width.setValue(20)
+    assert window.session.doc.get("site_circle").primitive.r == 10
+
+
+def test_selecting_an_object_never_shifts_the_canvas(qtbot):
+    """A real bug found by the Tab test: the Size row's width/height boxes
+    are wider than its '—' placeholder, so selecting an object widened the
+    properties panel, squeezed the canvas, and (zoom anchors on the view
+    centre) slid the whole drawing sideways."""
+    window = _shown_backyard_editor(qtbot)
+    QApplication.processEvents()
+    centre = window._view.viewport().rect().center()
+    before = window._view.mapToScene(centre)
+    panel_width = window._panel.width()
+
+    _click_scene_point(window, 11.966, 16.5)  # selects the hot tub
+    QApplication.processEvents()
+
+    assert window._panel.width() == panel_width
+    after = window._view.mapToScene(window._view.viewport().rect().center())
+    assert (after.x(), after.y()) == pytest.approx((before.x(), before.y()), abs=1e-6)
