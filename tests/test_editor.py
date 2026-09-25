@@ -2201,7 +2201,13 @@ def art_calls(monkeypatch):
     real = render_art.render_art_image
 
     def recording(doc, scene, materials, dpi=150.0, style=None, show_annotations=False, **overlays):
-        calls.append({"dpi": dpi, "ids": {o.id for o in scene.objects}, "show_annotations": show_annotations, **overlays})
+        calls.append({
+            "dpi": dpi,
+            "ids": {o.id for o in scene.objects},
+            "centres": {o.id: (o.geometry.centroid.x, o.geometry.centroid.y) for o in scene.objects},
+            "show_annotations": show_annotations,
+            **overlays,
+        })
         return real(doc, scene, materials, dpi=dpi, style=style, show_annotations=show_annotations, **overlays)
 
     monkeypatch.setattr(render_art, "render_art_image", recording)

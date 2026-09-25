@@ -1685,7 +1685,7 @@ class EditorWindow(QMainWindow):
             on_object_moved=self.session.sync_object,
             hidden_layers=self._hidden_layers,
             on_drag_start=self.session.push_undo,
-            on_drag_end=self.session.autosave,
+            on_drag_end=self._on_object_drag_end,
             line_width=_line_width_for_zoom(zoom),
         )
         if self.session.rules:
@@ -1714,6 +1714,20 @@ class EditorWindow(QMainWindow):
             self.statusBar().showMessage("Art preview — read-only. Switch to Design (Ctrl+1) to edit.")
         self._undo_action.setEnabled(self.session.can_undo)
         self._redo_action.setEnabled(self.session.can_redo)
+
+    def _on_object_drag_end(self) -> None:
+        """A move-drag has finished. The drag itself only updated the
+        document and the item's own outline, so bring everything else up to
+        date: recompute the resolved geometry and the rule check (a real
+        bug when this was missing — the art preview, and any later redraw,
+        still used the pre-drag geometry, so a moved firepit snapped back
+        to its old spot on switching views, though the file had saved
+        correctly), autosave, then redraw. The redraw is queued until the
+        mouse event has fully returned: replacing the scene inside it would
+        destroy the item still handling that event."""
+        self.session.recompute()
+        self.session.autosave()
+        QTimer.singleShot(0, self._rebuild_scene)
 
     # --- Design / Art preview ---------------------------------------------
 

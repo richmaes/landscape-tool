@@ -1,0 +1,94 @@
+# Test fixture for tests/test_movement.py: one object of each kind the
+# editor can drag, spaced apart so each can be grabbed on its own, plus a
+# ring that depends on the pond (center_of + boolean difference) to check
+# dependents follow a move. The bottom-left corner is left clear: the
+# legend box sits there by default and would catch a drag meant for an object. Not a design; edit freely alongside the tests.
+
+units: ft
+page_width: 20
+page_height: 20
+scale: 36
+layers: [ground, structures, annotation]
+
+objects:
+  - id: pond_border
+    type: circle
+    cx: 10
+    cy: 13
+    r: 3.333
+    center_of: pond
+    boolean: {op: difference, targets: [pond]}
+    material: pavers_light_grey
+    pattern: sailor
+    layer: ground
+    z: 0
+
+  - id: pond
+    type: circle
+    cx: 10
+    cy: 13
+    r: 3
+    material: water
+    layer: ground
+    z: 1
+
+  - id: bed
+    type: rect
+    x: 5
+    y: 2
+    width: 4
+    height: 3
+    material: planting_bed
+    layer: ground
+    z: 1
+
+  - id: firepit
+    type: ellipse
+    cx: 15
+    cy: 4
+    rx: 1
+    ry: 0.8
+    layer: structures
+    z: 2
+
+  - id: firepit_keepout
+    type: keepout
+    rule: no_burnable_material
+    shape: {type: circle, cx: 15, cy: 4, r: 2.5}
+    layer: annotation
+    z: 3
+
+  - id: feature
+    type: regular_polygon
+    cx: 3
+    cy: 13
+    sides: 6
+    size: 1
+    layer: structures
+    z: 2
+
+  - id: fence
+    type: fence_line
+    points: [[1, 19], [19, 19]]
+    material: fence
+    layer: structures
+    z: 2
+
+  - id: seam
+    type: line
+    x1: 7
+    y1: 8
+    x2: 11
+    y2: 8
+    layer: structures
+    z: 2
+
+  - id: marker
+    type: rect
+    x: 14
+    y: 9
+    width: 4
+    height: 3
+    annotation: true
+    layer: annotation
+    z: 4

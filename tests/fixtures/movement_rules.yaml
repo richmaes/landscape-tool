@@ -1,0 +1,8 @@
+# Rules for tests/fixtures/movement.yaml (tests/test_movement.py): just
+# enough to check the rule checker re-runs after a drag.
+rules:
+  - id: firepit_keepout_concentric
+    type: concentricity
+    tolerance: 0.01
+    pairs:
+      - {zone: firepit_keepout, center: firepit}
