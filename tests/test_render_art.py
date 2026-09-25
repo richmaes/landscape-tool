@@ -155,3 +155,88 @@ def test_line_objects_get_a_pencil_stroke():
     on_line = arr[int(5 * 36) - 1 : int(5 * 36) + 2, 100:260].mean()
     off_line = arr[int(3 * 36) - 1 : int(3 * 36) + 2, 100:260].mean()
     assert on_line < off_line - 10
+
+
+# --- canopy, cross-hatching, paper image ------------------------------------------
+
+
+def test_scallop_turns_a_crown_into_a_bumpy_blob_of_about_the_same_size():
+    from shapely.geometry import Point
+
+    from landscape.render_art import _scallop
+
+    crown = Point(5, 5).buffer(2.0)
+    blob = _scallop(crown, np.random.default_rng(1))
+    assert blob.is_valid and blob.geom_type == "Polygon"
+    assert blob.length > crown.length * 1.07  # the scallops add outline (~1.10 at the spacing judged right by eye)
+    assert abs(blob.area - crown.area) / crown.area < 0.25  # but it's still about the same tree
+    assert blob.centroid.distance(crown.centroid) < 0.3
+
+
+def test_canopy_material_renders_with_a_scalloped_edge():
+    from shapely.geometry import Point
+
+    lib = _library()
+    lib.materials["canopy"] = Material(id="canopy", name="Canopy", color="#7FA66B", texture={"style": "scallop"})
+    crown = _obj("tree", Point(5, 5).buffer(2.5), "canopy")
+    img = np.asarray(render_art_image(_doc(), ResolvedScene(objects=[crown]), lib, dpi=72), float)
+    # sample a ring just inside the true circle: a plain circle would be
+    # uniformly painted there; scallops leave some of it as paper
+    ring = [(5 + 2.35 * np.cos(t), 5 + 2.35 * np.sin(t)) for t in np.linspace(0, 2 * np.pi, 90, endpoint=False)]
+    greens = [img[int((10 - y) * 36), int(x * 36)] for x, y in ring]
+    paper_like = sum(1 for p in greens if np.abs(p - PAPER).max() < 25)
+    assert 5 < paper_like < 85
+
+
+def test_cross_hatching_adds_a_second_direction():
+    lib = _library()
+    lib.materials["cross"] = Material(
+        id="cross", name="Cross", color="#E0B27A", texture={"style": "hatch", "direction": 45, "cross": True}
+    )
+    single = _render([_obj("d", box(2, 2, 8, 8), "deck")], dpi=72)
+    cross = np.asarray(
+        render_art_image(_doc(), ResolvedScene(objects=[_obj("d", box(2, 2, 8, 8), "cross")]), lib, dpi=72), float
+    )
+    region = (slice(108, 252), slice(108, 252))
+    assert cross[region].mean() < single[region].mean() - 1
+
+
+def _stand_in_paper(tmp_path, colour=(230, 200, 160)) -> str:
+    """A generated stand-in for a real paper scan: a solid tone with one
+    dark vertical stripe, so its placement and scale can be measured."""
+    arr = np.zeros((100, 100, 3), np.uint8) + np.array(colour, np.uint8)
+    arr[:, 0:10] = (120, 110, 100)
+    path = tmp_path / "paper.png"
+    Image.fromarray(arr).save(path)
+    return str(path)
+
+
+def test_a_paper_image_replaces_the_procedural_paper(tmp_path):
+    paper = _stand_in_paper(tmp_path)
+    arr = _render([], dpi=72, style=ArtStyle(paper_image=paper, paper_image_width_in=1.0))
+    assert np.abs(arr[50, 50] - np.array([230, 200, 160])).max() < 20  # the scan's tone, not the default paper
+
+
+def test_a_paper_image_tiles_at_its_real_physical_size(tmp_path):
+    """`paper_image_width_in` fixes how big the scan is on paper, so its
+    texture doesn't shrink or grow with DPI: a 1 in tile repeats every
+    72 px at 72 DPI and every 144 px at 144 DPI."""
+    paper = _stand_in_paper(tmp_path)
+    for dpi in (72, 144):
+        arr = _render([], dpi=dpi, style=ArtStyle(paper_image=paper, paper_image_width_in=1.0))
+        row = arr[5].mean(axis=1)
+        dark_starts = [x for x in range(1, len(row)) if row[x] < 170 <= row[x - 1]]
+        assert dark_starts[:2] == [dpi, 2 * dpi]
+
+
+def test_lifting_restores_the_paper_image_not_a_flat_tone(tmp_path):
+    """Under an upper object the lower wash is lifted back to *paper* —
+    with a scan, that has to be the scan's own texture."""
+    paper = _stand_in_paper(tmp_path)
+    style = ArtStyle(paper_image=paper, paper_image_width_in=1.0)
+    lib = _library()
+    unassigned_on_lawn = [_obj("lawn", box(0, 0, 10, 10), "lawn"), _obj("gap", box(2, 2, 8, 8), None, z=1)]
+    arr = np.asarray(render_art_image(_doc(), ResolvedScene(objects=unassigned_on_lawn), lib, dpi=72, style=style), float)
+    stripe = arr[180, 216 + 2]  # x = 3 in (a tile boundary) + 2 px, inside the gap
+    plain = arr[180, 216 + 40]
+    assert stripe.mean() < plain.mean() - 40

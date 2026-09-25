@@ -65,6 +65,11 @@ class ArtStyle:
     pencil: float = 0.65  # overall weight of every pencil mark (outlines, hatching, ripples, stipple); 1.0 = heavy
     grain: float = 0.07
     shadow_layers: tuple[str, ...] = ("structures",)
+    # A real paper/canvas scan (PNG/JPEG) to paint on instead of the
+    # procedural paper, tiled at `paper_image_width_in` inches wide per
+    # tile so its texture keeps its true size at any DPI.
+    paper_image: str | None = None
+    paper_image_width_in: float = 6.0
     extras: dict = field(default_factory=dict)
 
 
@@ -117,13 +122,19 @@ def _wobble(geom: BaseGeometry, noise: _Noise, amplitude: float, step: float) ->
 class _Canvas:
     """A float RGB page plus the raster helpers every layer shares."""
 
-    def __init__(self, doc: SceneDocument, dpi: float, paper_rgb: np.ndarray):
+    def __init__(self, doc: SceneDocument, dpi: float, style: "ArtStyle"):
         self.ppu = doc.scale / 72.0 * dpi  # pixels per scene unit
         self.units_per_inch = 72.0 / doc.scale  # scene units per inch of paper
         self.page_height = doc.page_height
         self.w = round(doc.page_width * self.ppu)
         self.h = round(doc.page_height * self.ppu)
-        self.rgb = np.ones((self.h, self.w, 3), np.float32) * paper_rgb
+        # The bare paper, kept separately so `lift` can restore it exactly —
+        # a scan's own texture included, not just a flat tone.
+        if style.paper_image:
+            self.paper = _tiled_paper(style.paper_image, style.paper_image_width_in * dpi, (self.h, self.w))
+        else:
+            self.paper = np.ones((self.h, self.w, 3), np.float32) * _rgb(style.paper_color)
+        self.rgb = self.paper.copy()
 
     def crop_for(self, geom: BaseGeometry, margin: float) -> tuple[int, int, int, int] | None:
         minx, miny, maxx, maxy = geom.bounds
@@ -204,14 +215,14 @@ class _Canvas:
             ctx.fill()
         return self._read(surface)
 
-    def lift(self, crop, mask: np.ndarray, paper_rgb: np.ndarray) -> None:
+    def lift(self, crop, mask: np.ndarray) -> None:
         """Take the canvas back toward bare paper under `mask` — the way a
         painter leaves an area unpainted, or lifts a wash, rather than
         glazing the deck on top of the sand. Without this, multiply-blended
         washes stack into mud wherever objects overlap."""
         x0, y0, x1, y1 = crop
         m = np.clip(mask, 0, 1)[..., None]
-        self.rgb[y0:y1, x0:x1] = self.rgb[y0:y1, x0:x1] * (1 - m) + paper_rgb * m
+        self.rgb[y0:y1, x0:x1] = self.rgb[y0:y1, x0:x1] * (1 - m) + self.paper[y0:y1, x0:x1] * m
 
     def multiply(self, crop, density: np.ndarray, rgb: np.ndarray) -> None:
         """Transparent pigment: at density d, each channel keeps
@@ -219,6 +230,19 @@ class _Canvas:
         x0, y0, x1, y1 = crop
         d = np.clip(density, 0, 1)[..., None]
         self.rgb[y0:y1, x0:x1] *= 1 - d * (1 - rgb)
+
+
+def _tiled_paper(path: str, tile_width_px: float, shape: tuple[int, int]) -> np.ndarray:
+    """A paper scan, scaled so one copy is `tile_width_px` wide and tiled
+    across the page from its top-left corner."""
+    with Image.open(path) as img:
+        img = img.convert("RGB")
+        tile_w = max(1, round(tile_width_px))
+        tile_h = max(1, round(img.height * tile_w / img.width))
+        tile = np.asarray(img.resize((tile_w, tile_h), Image.LANCZOS), np.float32) / 255.0
+    h, w = shape
+    reps = (math.ceil(h / tile_h), math.ceil(w / tile_w), 1)
+    return np.tile(tile, reps)[:h, :w].copy()
 
 
 def _rgb(hex_color: str) -> np.ndarray:
@@ -304,6 +328,46 @@ _WASHES = {"diffuse": _wash_diffuse, "layered": _wash_layered}
 # ---------------------------------------------------------------------------
 
 
+def _scallop(geom: BaseGeometry, rng: np.random.Generator) -> BaseGeometry:
+    """A tree/shrub crown as a bumpy blob: overlapping circles set just
+    inside the outline, unioned with the solid core. Bump size scales with
+    the crown, so a big tree and a small shrub both read as foliage."""
+    from shapely.ops import unary_union
+
+    r = float(np.clip(math.sqrt(geom.area) * 0.15, 0.2, 0.8))
+    core = geom.buffer(-r)
+    if core.is_empty:
+        return geom
+    circles = [core]
+    for ring in [g.exterior for g in getattr(core, "geoms", [core])]:
+        count = max(5, int(ring.length / (r * 1.4)))
+        for i in range(count):
+            p = ring.interpolate((i + rng.uniform(-0.2, 0.2)) / count, normalized=True)
+            circles.append(p.buffer(r * rng.uniform(0.8, 1.15)))
+    blob = unary_union(circles)
+    if blob.geom_type == "MultiPolygon":
+        blob = max(blob.geoms, key=lambda g: g.area)
+    return blob
+
+
+def _leaf_clumps(geom: BaseGeometry, rng: np.random.Generator) -> list[BaseGeometry]:
+    """A few short pencil arcs inside a crown, suggesting leaf clusters."""
+    r = float(np.clip(math.sqrt(geom.area) * 0.15, 0.2, 0.8))
+    inner = geom.buffer(-r * 1.2)
+    if inner.is_empty:
+        return []
+    minx, miny, maxx, maxy = inner.bounds
+    arcs = []
+    for _ in range(max(3, int(inner.area / (r * r * 3)))):
+        x, y = rng.uniform(minx, maxx), rng.uniform(miny, maxy)
+        if not inner.contains(Point(x, y)):
+            continue
+        start = rng.uniform(0, 2 * math.pi)
+        t = np.linspace(start, start + rng.uniform(1.6, 2.6), 12)
+        arcs.append(LineString(np.column_stack([x + r * 0.5 * np.cos(t), y + r * 0.5 * np.sin(t)])))
+    return arcs
+
+
 def _hatch_lines(geom, direction_deg: float, spacing: float, overshoot: float) -> list[BaseGeometry]:
     """Parallel lines across the region at `direction_deg`, clipped to it
     grown by `overshoot` — letting strokes run slightly past the edge is
@@ -330,10 +394,16 @@ def _texture(canvas: _Canvas, obj: ResolvedObject, material: Material, crop, sty
     pigment = np.clip(_rgb(material.color) * 0.55, 0, 1)
 
     if kind == "hatch":
-        lines = _hatch_lines(geom, float(recipe.get("direction", 45)), float(recipe.get("spacing", 0.34)), 0.06)
-        noise = _Noise(rng, (0.8, 1.7, 3.1))
-        lines = [_wobble(line, noise, style.wobble * 0.35, step=0.1) for line in lines]
-        mask = canvas.stroke_mask(lines, crop, width * 0.8, alpha=0.55 * style.pencil)
+        direction = float(recipe.get("direction", 45))
+        directions = [direction, direction + 90] if recipe.get("cross") else [direction]
+        for angle in directions:
+            lines = _hatch_lines(geom, angle, float(recipe.get("spacing", 0.34)), 0.06)
+            noise = _Noise(rng, (0.8, 1.7, 3.1))
+            lines = [_wobble(line, noise, style.wobble * 0.35, step=0.1) for line in lines]
+            mask = canvas.stroke_mask(lines, crop, width * 0.8, alpha=0.55 * style.pencil)
+            canvas.multiply(crop, mask, pigment)
+    elif kind == "scallop":
+        mask = canvas.stroke_mask(_leaf_clumps(geom, rng), crop, width * 0.9, alpha=0.5 * style.pencil)
         canvas.multiply(crop, mask, pigment)
     elif kind == "stipple":
         area = geom.area
@@ -388,10 +458,9 @@ def render_art_image(
 ) -> Image.Image:
     style = style or ArtStyle()
     rng = np.random.default_rng(style.seed)
-    canvas = _Canvas(doc, dpi, _rgb(style.paper_color))
+    canvas = _Canvas(doc, dpi, style)
     ppu = canvas.ppu
     clouds = (_cloud(rng, (canvas.h, canvas.w), 1.2 * ppu), _cloud(rng, (canvas.h, canvas.w), 0.012 * dpi))
-    paper = _rgb(style.paper_color)
     if style.wash not in _WASHES:
         raise ValueError(f"unknown wash style '{style.wash}' (use one of: {', '.join(sorted(_WASHES))})")
     wash = _WASHES[style.wash]
@@ -405,6 +474,9 @@ def render_art_image(
         is_area = geom.geom_type in ("Polygon", "MultiPolygon")
         if geom.is_empty or obj.annotation or obj.rule:
             continue
+        if is_area and (material.texture or {}).get("style") == "scallop":
+            geom = _scallop(geom, rng)
+            obj = ResolvedObject(obj.id, geom, obj.material, obj.layer, obj.z, obj.annotation, obj.rule)
         crop = canvas.crop_for(geom, margin=0.6)
         if crop is None:
             continue
@@ -417,7 +489,7 @@ def render_art_image(
         if is_area:
             inner = geom.buffer(-style.lift_overlap)
             if not inner.is_empty:
-                canvas.lift(crop, gaussian_filter(canvas.fill_mask(inner, crop), 0.03 * ppu), paper)
+                canvas.lift(crop, gaussian_filter(canvas.fill_mask(inner, crop), 0.03 * ppu))
         if is_area and material.id != _FALLBACK_ID:
             canvas.multiply(crop, wash(canvas, geom, crop, style, rng, clouds), _pigment(material))
             _texture(canvas, obj, material, crop, style, rng)
@@ -444,9 +516,10 @@ def render_art_image(
         dashes = _dash(outline, 0.35, 0.2)
         canvas.multiply(crop, canvas.stroke_mask(dashes, crop, width, 0.5 * style.pencil), pencil)
 
-    grain = _cloud(rng, (canvas.h, canvas.w), 0.004 * dpi)
-    tooth = _cloud(rng, (canvas.h, canvas.w), 0.03 * dpi)
-    canvas.rgb *= 1 - style.grain * (0.6 * (0.5 + 0.5 * grain) + 0.4 * (0.5 + 0.5 * tooth))[..., None]
+    if not style.paper_image:  # a scan brings its own grain
+        grain = _cloud(rng, (canvas.h, canvas.w), 0.004 * dpi)
+        tooth = _cloud(rng, (canvas.h, canvas.w), 0.03 * dpi)
+        canvas.rgb *= 1 - style.grain * (0.6 * (0.5 + 0.5 * grain) + 0.4 * (0.5 + 0.5 * tooth))[..., None]
 
     return Image.fromarray((np.clip(canvas.rgb, 0, 1) * 255).astype(np.uint8), "RGB")
 
