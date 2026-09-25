@@ -216,6 +216,22 @@ class EditorSession:
                 raw_obj, "transform", CommentedMap(tx=t.tx, ty=t.ty, rotation=t.rotation, scale=t.scale)
             )
 
+    def set_overlay_position(self, name: str, x: float, y: float) -> None:
+        """Move the legend box or scale indicator (`name` is `legend` or
+        `scale_indicator`) to a new origin point, in scene units. Undoable,
+        and written to the scene file as `name: {x, y}` — only from the
+        first move on, so an untouched file keeps round-tripping unchanged."""
+        from .scene_io import OVERLAY_KEYS
+        from .schema import Placement
+
+        if name not in OVERLAY_KEYS:
+            raise ValueError(f"unknown overlay '{name}' (use one of: {', '.join(OVERLAY_KEYS)})")
+        self.push_undo()
+        setattr(self.doc, name, Placement(x=round(x, 3), y=round(y, 3)))
+        self.raw[name] = CommentedMap(x=round(x, 3), y=round(y, 3))
+        self.recompute()
+        self.autosave()
+
     def set_rotation(self, object_id: str, value: float) -> None:
         self.push_undo()
         self.doc.get(object_id).transform.rotation = value

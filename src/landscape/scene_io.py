@@ -17,6 +17,7 @@ from ruamel.yaml import YAML
 
 from .schema import (
     Definition,
+    Placement,
     SceneDocument,
     SceneObject,
     SchemaError,
@@ -100,7 +101,23 @@ def parse_scene(raw: Any) -> SceneDocument:
             raise SchemaError(str(exc), path=path_hint, line=line_of(obj_data)) from exc
 
     doc.resolution_order = validate_and_order(doc)
+    doc.legend = _parse_placement(raw, "legend")
+    doc.scale_indicator = _parse_placement(raw, "scale_indicator")
     return doc
+
+
+OVERLAY_KEYS = ("legend", "scale_indicator")
+
+
+def _parse_placement(raw: Any, key: str) -> Placement | None:
+    data = raw.get(key)
+    if data is None:
+        return None
+    try:
+        return Placement(x=float(data["x"]), y=float(data["y"]))
+    except (TypeError, KeyError, ValueError) as exc:
+        raise SchemaError(f"'{key}' must be a mapping with numeric x and y, e.g. {{x: 1, y: 2}}", path=key,
+                          line=line_of(data) or line_of(raw)) from exc
 
 
 def _parse_object(obj_id: str, obj_data: Any, doc: SceneDocument) -> SceneObject:

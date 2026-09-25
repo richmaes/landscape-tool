@@ -382,6 +382,15 @@ class Definition:
 
 
 @dataclass
+class Placement:
+    """Where a drawing overlay (the legend box, the scale indicator) sits,
+    in scene units: its origin point, which the designer drags."""
+
+    x: float
+    y: float
+
+
+@dataclass
 class SceneDocument:
     """Top-level scene document: units, canvas, scale, layer order, palette
     reference, reusable definitions, and the object list."""
@@ -395,6 +404,11 @@ class SceneDocument:
     definitions: dict[str, Definition] = field(default_factory=dict)
     objects: list[SceneObject] = field(default_factory=list)
     resolution_order: list[str] = field(default_factory=list)
+    # Overlay positions, present only once the designer has moved them —
+    # until then the defaults in `overlays.py` apply (and an untouched file
+    # round-trips byte-identical).
+    legend: Placement | None = None
+    scale_indicator: Placement | None = None
     """Object ids in dependency order (relations + boolean ops resolved
     before anything that references them). Populated by `scene_io` during
     validation; M3 walks it to resolve geometry."""
