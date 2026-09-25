@@ -22,7 +22,7 @@ to add heights to the elements."
 - **Renderer: leverage an existing engine if there is one** — see 3.3; a
   prototype with **PyVista** (VTK) works.
 - **Background: a vinyl fence all around the yard, with sky above it** — see
-  2.4.
+  2.3.
 
 ## What the mode is
 
@@ -126,7 +126,7 @@ losslessly.
 | Tree / shrub canopy | trunk 0 → crown base | crown top | needs a trunk + crown shape, not an extrusion |
 | Keep-out zone, annotations | — | — | not physical; optionally drawn as a ground outline |
 
-### 2.4 Background: the surrounding vinyl fence and sky (decided)
+### 2.3 Background: the surrounding vinyl fence and sky (decided)
 
 Rich: *"There is a vinyl fence around the back yard. You can make a surrounding
 vinyl fence with sky above it as the 3D background."*
@@ -141,7 +141,7 @@ vinyl fence with sky above it as the 3D background."*
 - It is part of the scene, not just a backdrop: it should show in Design mode
   too once it's real fence objects.
 
-### 2.3 Things heights raise that the plan never had to answer
+### 2.4 Things heights raise that the plan never had to answer
 
 - **Ground level.** Assume a flat site at z = 0 for the first version; real
   grade (slopes, steps, the patio's fall) is an open question.
