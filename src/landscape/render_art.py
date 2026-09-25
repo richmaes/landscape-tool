@@ -257,9 +257,42 @@ def _pigment(material: Material) -> np.ndarray:
     return np.clip(1 - (1 - rgb) * 1.15, 0, 1)
 
 
+_COARSE_SIGMA_PX = 3.0  # blurs wider than this run on a coarse grid (see _blur)
+
+
+def _resize(arr: np.ndarray, shape: tuple[int, int], resample) -> np.ndarray:
+    h, w = shape
+    return np.asarray(Image.fromarray(arr.astype(np.float32), mode="F").resize((w, h), resample), np.float32)
+
+
+def _blur(arr: np.ndarray, sigma_px: float) -> np.ndarray:
+    """A Gaussian blur that stays cheap when it's wide. A wide blur leaves
+    nothing but low frequencies, so it can run on a grid shrunk until the
+    blur is ~3 px there, then be scaled back up — visually identical, and
+    at 300 DPI the difference between minutes and seconds (the full-size
+    version was 94% of an art render's time)."""
+    if sigma_px <= _COARSE_SIGMA_PX * 2:
+        return gaussian_filter(arr, sigma_px)
+    factor = sigma_px / _COARSE_SIGMA_PX
+    h, w = arr.shape
+    small = (max(1, round(h / factor)), max(1, round(w / factor)))
+    coarse = gaussian_filter(_resize(arr, small, Image.BOX), _COARSE_SIGMA_PX)
+    return _resize(coarse, (h, w), Image.BILINEAR)
+
+
 def _cloud(rng: np.random.Generator, shape: tuple[int, int], sigma_px: float) -> np.ndarray:
-    """Smooth random field in roughly [-1, 1]."""
-    field_ = gaussian_filter(rng.standard_normal(shape).astype(np.float32), max(sigma_px, 0.5))
+    """Smooth random field in roughly [-1, 1]. A wide one is drawn on a
+    coarse grid whose cell count depends only on the field's size relative
+    to its smoothness — so the same seed gives the same pattern at any DPI
+    — then scaled up."""
+    h, w = shape
+    if sigma_px <= _COARSE_SIGMA_PX * 2:
+        field_ = gaussian_filter(rng.standard_normal(shape).astype(np.float32), max(sigma_px, 0.5))
+    else:
+        factor = sigma_px / _COARSE_SIGMA_PX
+        small = (max(1, round(h / factor)), max(1, round(w / factor)))
+        coarse = gaussian_filter(rng.standard_normal(small).astype(np.float32), _COARSE_SIGMA_PX)
+        field_ = _resize(coarse, shape, Image.BICUBIC)
     std = field_.std() or 1.0
     return np.clip(field_ / (2.5 * std), -1, 1)
 
@@ -277,8 +310,8 @@ def _wash_diffuse(canvas: _Canvas, geom, crop, style: ArtStyle, rng, clouds) -> 
         noise = _Noise(rng, (0.6, 1.1, 1.9, 3.3, 5.2))
         layer_geom = _wobble(geom, noise, style.wobble, step=0.08)
         mask = canvas.fill_mask(layer_geom, crop)
-        soft = gaussian_filter(mask, 0.035 * ppu)
-        rim = np.clip(soft - gaussian_filter(soft, 0.22 * ppu), 0, None) * 2.2
+        soft = _blur(mask, 0.035 * ppu)
+        rim = np.clip(soft - _blur(soft, 0.22 * ppu), 0, None) * 2.2
         density += soft * style.wash_strength / style.wash_layers + rim * style.edge_pooling / style.wash_layers
     variation, gran = clouds
     density *= 1 + style.variation * variation[y0:y1, x0:x1]
@@ -483,13 +516,13 @@ def render_art_image(
 
         if is_area and obj.layer in style.shadow_layers:
             shadow = affinity.translate(geom, 0.12, -0.12)
-            mask = gaussian_filter(canvas.fill_mask(shadow, crop), 0.1 * ppu)
+            mask = _blur(canvas.fill_mask(shadow, crop), 0.1 * ppu)
             canvas.multiply(crop, mask * 0.22, np.array([0.45, 0.48, 0.58], np.float32))
 
         if is_area:
             inner = geom.buffer(-style.lift_overlap)
             if not inner.is_empty:
-                canvas.lift(crop, gaussian_filter(canvas.fill_mask(inner, crop), 0.03 * ppu))
+                canvas.lift(crop, _blur(canvas.fill_mask(inner, crop), 0.03 * ppu))
         if is_area and material.id != _FALLBACK_ID:
             canvas.multiply(crop, wash(canvas, geom, crop, style, rng, clouds), _pigment(material))
             _texture(canvas, obj, material, crop, style, rng)

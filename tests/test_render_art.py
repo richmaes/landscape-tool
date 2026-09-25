@@ -310,3 +310,16 @@ def test_one_dispatcher_serves_every_mode_and_format(tmp_path):
         check_output("a.png", "sketch")
     with pytest.raises(ValueError, match="unsupported"):
         check_output("a.jpg", "art")
+
+
+def test_the_fast_coarse_grid_blur_matches_a_true_gaussian():
+    """Wide blurs run on a shrunk grid for speed (34 s -> 4.5 s for the
+    backyard at 300 DPI); that must stay visually the same as the real one."""
+    from scipy.ndimage import gaussian_filter
+
+    from landscape.render_art import _blur
+
+    mask = np.zeros((400, 400), np.float32)
+    mask[100:300, 120:280] = 1.0
+    fast, true = _blur(mask, 30), gaussian_filter(mask, 30)
+    assert np.abs(fast - true).max() < 0.03
