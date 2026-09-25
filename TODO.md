@@ -1,6 +1,6 @@
 # Landscape Rendering Tool — Task List
 
-**Status:** M0–M5, M1, M3b, and (bar one genuinely-blocked item) M8 all complete. The editor now covers its entire checklist: load, pan/zoom, select/move/resize/rotate (drag directly or via the panel), swatch-based material picking, relation editing, create-objects-from-a-palette, lossless save (toolbar Save button, unsaved-changes indicator, save/discard prompt on close), undo/redo, autosave, layer toggling, watch-and-reload, live rule-checker feedback, and export-to-PNG/SVG/PDF. Dashed annotation/keepout objects are selectable along their outline, and Tab on the canvas cycles through layered objects under the pointer. A run of real mouse-interaction bugs in move/resize/rotate was found and fixed 2026-09-22 to 09-24 (see the M8 notes); two follow-ups are parked in the new **Feature backlog** — see the M8 section for what's honestly partial (resize/rotate is uniform-scale/absolute-rotation only) versus fully done. Its non-GUI logic lives in `EditorSession` (`editor_session.py`, zero Qt dependency), with `EditorWindow` as a thin wrapper. `scenes/backyard.yaml` is the real design (converted from `extraction/objects.json`), not just the `scenes/example.yaml` schema fixture — see M1 for a real finding this surfaced (the documented `deck_intrudes_on_keepout` doesn't actually hold against the keepout as drawn). M7 export is done (2026-09-24) bar embedding art-mode raster fills, which needs M6: real DPI for PNG, SVG sized in points, scale bar and north arrow, an Export options dialog in the editor, and batch export recipes (`landscape export`), which also cover M8b. **M6 art mode is built (2026-09-24):** a watercolor-and-pencil renderer (`render_art.py`; diffuse or layered wash, per-material pencil textures, tree canopies, shadows, paper grain or a paper scan), in every export path (`--mode art`, recipes, the editor's Export dialog) and as a **Design / Art preview** switch in the editor — which also completes M8. The look itself stays open to iteration by eye. Since then (2026-09-25) the editor gained an editable **Size** row (type a width or height to reshape an object non-uniformly), a movable **legend box** and **scale indicator** (drawn in every mode), **paver** materials (5 colors x herringbone 45°/90°, running bond, basketweave, sailor border) and **deck wood colors**; the backyard gained its existing light grey herringbone patio and sand-circle border (page grown to 36 ft); and three real bugs were fixed — dragged objects snapping back on switching views, trackpad zoom lagging and backing up a step, and the canvas sliding sideways on selection. Remaining open work: M9 (broader validation, including the deferred golden-image tests), M10 (docs), and the feature backlog.
+**Status:** M0–M5, M1, M3b, and (bar one genuinely-blocked item) M8 all complete. The editor now covers its entire checklist: load, pan/zoom, select/move/resize/rotate (drag directly or via the panel), swatch-based material picking, relation editing, create-objects-from-a-palette, lossless save (toolbar Save button, unsaved-changes indicator, save/discard prompt on close), undo/redo, autosave, layer toggling, watch-and-reload, live rule-checker feedback, and export-to-PNG/SVG/PDF. Dashed annotation/keepout objects are selectable along their outline, and Tab on the canvas cycles through layered objects under the pointer. A run of real mouse-interaction bugs in move/resize/rotate was found and fixed 2026-09-22 to 09-24 (see the M8 notes); two follow-ups are parked in the new **Feature backlog** — see the M8 section for what's honestly partial (resize/rotate is uniform-scale/absolute-rotation only) versus fully done. Its non-GUI logic lives in `EditorSession` (`editor_session.py`, zero Qt dependency), with `EditorWindow` as a thin wrapper. `scenes/backyard.yaml` is the real design (converted from `extraction/objects.json`), not just the `scenes/example.yaml` schema fixture — see M1 for a real finding this surfaced (the documented `deck_intrudes_on_keepout` doesn't actually hold against the keepout as drawn). M7 export is done (2026-09-24) bar embedding art-mode raster fills, which needs M6: real DPI for PNG, SVG sized in points, scale bar and north arrow, an Export options dialog in the editor, and batch export recipes (`landscape export`), which also cover M8b. **M6 art mode is built (2026-09-24):** a watercolor-and-pencil renderer (`render_art.py`; diffuse or layered wash, per-material pencil textures, tree canopies, shadows, paper grain or a paper scan), in every export path (`--mode art`, recipes, the editor's Export dialog) and as a **Design / Art preview** switch in the editor — which also completes M8. The look itself stays open to iteration by eye. Since then (2026-09-25) the editor gained an editable **Size** row (type a width or height to reshape an object non-uniformly), a movable **legend box** and **scale indicator** (drawn in every mode), **paver** materials (5 colors x herringbone 45°/90°, running bond, basketweave, sailor border) and **deck wood colors**; the backyard gained its existing light grey herringbone patio and sand-circle border (page grown to 36 ft); and three real bugs were fixed — dragged objects snapping back on switching views, trackpad zoom lagging and backing up a step, and the canvas sliding sideways on selection. Remaining open work: M9 (broader validation, including the deferred golden-image tests), M10 (docs), **M11 (3D view — requirements captured, `docs/3d-view-requirements.md`)**, and the feature backlog.
 **Last updated:** 2026-09-25
 
 ## Decisions locked in
@@ -54,7 +54,7 @@ definitions, and a rule checker instead — see M2 and M3b.
 - [x] ~~Units and coordinate origin~~ — feet, +x east / +y north, origin bottom-left, 36 pt = 1 ft.
 - [x] ~~UI stack for the editor~~ — resolved 2026-09-21: desktop, using **PySide6** (Qt for Python; LGPL, free for commercial use, unlike PyQt6's GPL/commercial dual license). `QGraphicsView`/`QGraphicsScene` gives interactive selection/move/resize/rotate largely for free, which Tkinter's plain `Canvas` doesn't.
 - [ ] **Target print size / DPI** for the art mode (drives texture resolution budget).
-- [ ] **Elevation / 3D** — assumed out of scope; 2D plan view only. Confirm.
+- [x] ~~**Elevation / 3D**~~ — resolved 2026-09-25: now in scope. Rich wants a 3D view from a camera placed in the plan, which brings heights for the elements. Requirements in `docs/3d-view-requirements.md` (with its own open questions: default heights, camera controls, style first, renderer technology, what's beyond the page); work items are **M11** below.
 - [ ] **Full site extent** — the source PDF is a 24 x 24 ft crop; the real yard is significantly larger.
 - [ ] **Mechanical bay side** — east or west; both currently modelled as removable deck panels.
 
@@ -441,6 +441,47 @@ Gaps found, most important first:
 - [ ] `README.md` — install, quickstart, CLI usage
 - [ ] Worked example: the real site plan, from PDF through both render modes
 
+
+
+## M11 — 3D view  *(requirements captured 2026-09-25; not started)*
+
+A third view — **Design | Art preview | 3D view** — showing the backyard in perspective from a camera placed in the plan. Full requirements, proposed default heights and open questions: `docs/3d-view-requirements.md`. Decide its open questions (heights, camera controls, style, renderer technology) before building.
+
+**Camera**
+- [ ] Camera model: `id`, `x`, `y`, `z` (eye height), `heading` (degrees clockwise from plan-north, matching `north_deg`), `pitch`, `fov`; several named cameras per scene
+- [ ] Schema + round-trip: optional top-level `cameras:` list, written only once one exists (untouched files stay byte-identical); validation with line numbers
+- [ ] Design-mode camera marker: position + heading/field-of-view wedge on the canvas; drag to move, drag a handle to turn — undoable, saved, never drags the selected object, recomputes on release
+- [ ] Properties panel for a selected camera: X, Y, Z, heading, pitch, field of view as typed values
+- [ ] Create / delete / rename cameras; a chooser for the camera the 3D view uses
+- [ ] Cameras excluded from the legend, rule checker, Tab cycling, and exports (unless asked for)
+
+**Heights**
+- [ ] Object-level `base` (elevation) and `height`, optional in YAML, round-trip losslessly
+- [ ] Material-level default heights (e.g. deck 1.5 ft, pad 0.33 ft, ground surfaces 0) so most objects need nothing written
+- [ ] Use `fence_line`'s existing `height` / `post_spacing` / `post_size` / `rail_count`
+- [ ] Properties panel **Height** row (and base), editable like Size
+- [ ] Confirm the backyard's heights with Rich (fence heights already an open item; deck, hot tub, firepit, water features)
+- [ ] `sits_on:` relation so stacked things (tub on pad, planters on deck) follow what they rest on
+- [ ] Flat ground at z = 0 for now; real grade stays an open question
+
+**Rendering**
+- [ ] Choose the renderer technology (recommended: small in-house numpy + cairo renderer — no new dependencies, deterministic, testable)
+- [ ] Extrude each resolved 2D shape from base to base + height (holes carried through); flat objects as ground polygons in paint order
+- [ ] Fences as posts and rails; tree crowns as trunk + crown (not extrusions)
+- [ ] Perspective projection with correct hiding (nearer objects in front), clipping behind the camera
+- [ ] First style: flat-shaded material colors with simple sun lighting and silhouette/crease outlines
+- [ ] Pavers as a surface texture (joints), not ~6,000 bricks of geometry
+- [ ] Later style: watercolor-and-pencil perspective (washes from color regions, pencil from depth/normal edges), reusing the art renderer
+
+**Editor and exports**
+- [ ] **3D view** toolbar button and View menu entry (shortcut), read-only like Art preview, camera chooser in the toolbar; cached by document revision + camera
+- [ ] `3d` render mode in `render.py`; `landscape render --mode 3d --camera NAME`; `mode: 3d` + `camera:` in export recipes; Export dialog Style entry
+
+**Validation**
+- [ ] Camera math against hand-computed points (centre, off-axis angle, behind-camera culling, occlusion)
+- [ ] Heights and cameras round-trip; untouched scenes byte-identical
+- [ ] Real-drag tests for moving/turning the camera (like `test_movement.py`)
+- [ ] Determinism; preview speed target (backyard < ~1 s at screen resolution)
 
 ## Feature backlog
 
