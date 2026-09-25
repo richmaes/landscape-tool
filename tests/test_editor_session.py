@@ -173,7 +173,7 @@ def test_export_pdf(tmp_path):
 def test_export_rejects_unsupported_extension(tmp_path):
     session = EditorSession(DEFAULT_MATERIALS)
     session.load(_scene_copy(EXAMPLE_SCENE))
-    with pytest.raises(ValueError, match="unsupported export extension"):
+    with pytest.raises(ValueError, match="unsupported output type"):
         session.export(tmp_path / "out.jpg")
 
 

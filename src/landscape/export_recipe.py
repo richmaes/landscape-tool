@@ -16,10 +16,11 @@ A recipe is a small YAML file::
 Paths are relative to the recipe file itself, so a recipe works wherever
 it's run from (`materials`, if omitted, falls back to
 `assets/materials.yaml` in the working directory, like `landscape render`).
-Each output takes the same options as `landscape render`: `mode` (only
-`flat` exists until M6), `dpi` (PNG only — a `dpi` in `defaults` simply
-doesn't apply to SVG/PDF outputs), `legend`, `annotations`, `scale_bar`,
-`north_arrow`, `north_angle`.
+Each output takes the same options as `landscape render`: `mode` (`flat`
+or `art`), `dpi` (flat PNG, or any art output — a `dpi` in `defaults`
+simply doesn't apply to flat SVG/PDF outputs), `legend`, `annotations`,
+`scale_bar`, `north_arrow`, `north_angle`, and for art mode `wash`
+(`diffuse` or `layered`) and `paper_image` (a scan, relative to the recipe).
 
 The whole recipe is validated before anything is rendered, so a typo in
 the last output never leaves a half-finished batch behind; errors name the
@@ -35,10 +36,10 @@ from typing import Any
 
 from .geometry import resolve_scene
 from .materials import load_materials
-from .render_flat import render_scene_to_pdf, render_scene_to_png, render_scene_to_svg
+from .render import EXTENSIONS, render_to_file, takes_dpi
 from .scene_io import line_of, load_raw, load_scene
 
-_RENDERERS = {".png": render_scene_to_png, ".svg": render_scene_to_svg, ".pdf": render_scene_to_pdf}
+_WASHES = ("diffuse", "layered")
 _TOP_LEVEL_KEYS = {"scene", "materials", "defaults", "outputs"}
 _BOOL_OPTIONS = {
     "legend": "show_legend",
@@ -47,7 +48,8 @@ _BOOL_OPTIONS = {
     "north_arrow": "north_arrow",
 }
 _NUMBER_OPTIONS = {"dpi": "dpi", "north_angle": "north_deg"}
-_OUTPUT_KEYS = {"out", "mode"} | set(_BOOL_OPTIONS) | set(_NUMBER_OPTIONS)
+_ART_KEYS = {"wash", "paper_image"}
+_OUTPUT_KEYS = {"out", "mode"} | set(_BOOL_OPTIONS) | set(_NUMBER_OPTIONS) | _ART_KEYS
 
 
 class RecipeError(ValueError):
@@ -57,6 +59,7 @@ class RecipeError(ValueError):
 @dataclass
 class OutputSpec:
     path: Path
+    mode: str = "flat"
     render_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
@@ -117,18 +120,18 @@ def _parse_output(entry: Any, defaults: dict, base: Path, error) -> OutputSpec:
         raise error(entry, "'out' is required")
 
     out = _relative_to(base, entry["out"])
-    suffix = out.suffix.lower()
-    if suffix not in _RENDERERS:
+    if out.suffix.lower() not in EXTENSIONS:
         raise error(entry, f"unsupported output type '{out.suffix}' (use .png, .svg, or .pdf)")
-    if "dpi" in entry and suffix != ".png":
-        raise error(entry, "dpi only applies to .png outputs (SVG and PDF are vector)")
 
     options = {**defaults, **entry}
     mode = options.get("mode", "flat")
-    if mode == "art":
-        raise error(entry, "art mode is not implemented yet (M6)")
-    if mode != "flat":
+    if mode not in ("flat", "art"):
         raise error(entry, f"mode must be 'flat' or 'art', not '{mode}'")
+    if "dpi" in entry and not takes_dpi(out, mode):
+        raise error(entry, "dpi only applies to .png outputs in flat mode (flat SVG and PDF are vector)")
+    for key in _ART_KEYS & set(entry):
+        if mode != "art":
+            raise error(entry, f"{key} only applies to mode: art")
 
     kwargs: dict[str, Any] = {}
     for key, kwarg in _BOOL_OPTIONS.items():
@@ -141,10 +144,18 @@ def _parse_output(entry: Any, defaults: dict, base: Path, error) -> OutputSpec:
             value = options[key]
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise error(entry, f"{key} must be a number, not '{value}'")
-            if key == "dpi" and suffix != ".png":
-                continue  # a default dpi is for the PNGs; vector outputs ignore it
+            if key == "dpi" and not takes_dpi(out, mode):
+                continue  # a default dpi is for rasters; flat vector outputs ignore it
             kwargs[kwarg] = float(value)
-    return OutputSpec(path=out, render_kwargs=kwargs)
+    if mode == "art":
+        from .render_art import ArtStyle
+
+        wash = options.get("wash", "diffuse")
+        if wash not in _WASHES:
+            raise error(entry, f"wash must be one of {', '.join(_WASHES)}, not '{wash}'")
+        paper = options.get("paper_image")
+        kwargs["style"] = ArtStyle(wash=wash, paper_image=str(_relative_to(base, paper)) if paper else None)
+    return OutputSpec(path=out, mode=mode, render_kwargs=kwargs)
 
 
 def run_recipe(recipe: Recipe) -> list[Path]:
@@ -156,6 +167,6 @@ def run_recipe(recipe: Recipe) -> list[Path]:
     written = []
     for output in recipe.outputs:
         output.path.parent.mkdir(parents=True, exist_ok=True)
-        _RENDERERS[output.path.suffix.lower()](doc, scene, materials, output.path, **output.render_kwargs)
+        render_to_file(doc, scene, materials, output.path, mode=output.mode, **output.render_kwargs)
         written.append(output.path)
     return written

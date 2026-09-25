@@ -61,6 +61,7 @@ from shapely.geometry.base import BaseGeometry
 from .editor_session import CREATABLE_PRIMITIVE_KINDS, RELATION_TYPES, EditorSession
 from .geometry import ResolvedObject, ResolvedScene
 from .materials import Material, MaterialLibrary
+from .render import EXTENSIONS as EXPORT_EXTENSIONS
 from .rules import Violation
 from .schema import SceneDocument, SceneObject, SchemaError
 
@@ -922,17 +923,19 @@ class PropertiesPanel(QWidget):
         self.setEnabled(False)
 
 
-EXPORT_EXTENSIONS = (".png", ".svg", ".pdf")
 
 
 class ExportOptionsDialog(QDialog):
-    """File > Export's second step, after the file picker: the M7 export
-    options the CLI has, for the designer — DPI (PNG only), legend,
-    annotations, scale bar, north arrow and its angle. `options()` returns
-    exactly the keyword arguments `EditorSession.export()` passes on to
-    the renderer for this file's format."""
+    """File > Export's second step, after the file picker: the export
+    options the CLI has, for the designer — style (flat design colors or the
+    watercolor art mode) and its wash, DPI (for PNGs, and for art in any
+    format, where it's the painting's resolution), legend, annotations,
+    scale bar, north arrow and its angle. `options()` returns exactly the
+    keyword arguments `EditorSession.export()` takes for this file."""
 
     DEFAULTS = {
+        "mode": "flat",
+        "wash": "diffuse",
         "dpi": 300,
         "show_legend": True,  # what export always did before this dialog existed
         "scale_bar": False,
@@ -943,15 +946,26 @@ class ExportOptionsDialog(QDialog):
     def __init__(self, parent: QWidget | None, path: str | Path, show_annotations: bool, previous: dict | None = None):
         super().__init__(parent)
         self.setWindowTitle("Export options")
-        self._is_png = Path(path).suffix.lower() == ".png"
+        self._path = Path(path)
         values = {**self.DEFAULTS, "show_annotations": show_annotations, **(previous or {})}
+
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("Design (flat colors)", "flat")
+        self.mode_combo.addItem("Art (watercolor and pencil)", "art")
+        self.mode_combo.setCurrentIndex(self.mode_combo.findData(values["mode"]))
+        self.wash_combo = QComboBox()
+        self.wash_combo.addItem("Diffuse (soft, pooled edges)", "diffuse")
+        self.wash_combo.addItem("Layered (crisp glazes)", "layered")
+        self.wash_combo.setCurrentIndex(self.wash_combo.findData(values["wash"]))
 
         self.dpi_spin = QSpinBox()
         self.dpi_spin.setRange(36, 1200)
         self.dpi_spin.setSuffix(" DPI")
         self.dpi_spin.setValue(int(values["dpi"]))
-        self.dpi_spin.setEnabled(self._is_png)
-        self.dpi_spin.setToolTip("Pixels per inch of the drawing's print size (PNG only; SVG and PDF are vector)")
+        self.dpi_spin.setToolTip(
+            "Pixels per inch of the drawing's print size. Flat SVG/PDF are vector and don't use it; "
+            "art mode is a painting, so it applies to every format (higher is slower)"
+        )
         self.legend_check = QCheckBox("Material legend")
         self.legend_check.setChecked(values["show_legend"])
         self.annotations_check = QCheckBox("Annotations (dashed technical marks)")
@@ -972,7 +986,12 @@ class ExportOptionsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
+        self.mode_combo.currentIndexChanged.connect(self._update_enabled)
+        self._update_enabled()
+
         layout = QFormLayout(self)
+        layout.addRow("Style", self.mode_combo)
+        layout.addRow("Wash", self.wash_combo)
         layout.addRow("Resolution", self.dpi_spin)
         layout.addRow(self.legend_check)
         layout.addRow(self.annotations_check)
@@ -981,10 +1000,19 @@ class ExportOptionsDialog(QDialog):
         layout.addRow("North is at", self.north_angle_spin)
         layout.addRow(buttons)
 
+    def _update_enabled(self) -> None:
+        from .render import takes_dpi
+
+        mode = self.mode_combo.currentData()
+        self.dpi_spin.setEnabled(takes_dpi(self._path, mode))
+        self.wash_combo.setEnabled(mode == "art")
+
     def remembered(self) -> dict:
-        """Every choice, for pre-filling the next export (DPI included even
-        when this export isn't a PNG)."""
+        """Every choice, for pre-filling the next export (DPI and wash
+        included even when this export doesn't use them)."""
         return {
+            "mode": self.mode_combo.currentData(),
+            "wash": self.wash_combo.currentData(),
             "dpi": self.dpi_spin.value(),
             "show_legend": self.legend_check.isChecked(),
             "show_annotations": self.annotations_check.isChecked(),
@@ -994,9 +1022,15 @@ class ExportOptionsDialog(QDialog):
         }
 
     def options(self) -> dict:
+        from .render import takes_dpi
+        from .render_art import ArtStyle
+
         options = self.remembered()
-        if not self._is_png:
-            del options["dpi"]  # the SVG/PDF renderers don't take one
+        wash = options.pop("wash")
+        if not takes_dpi(self._path, options["mode"]):
+            del options["dpi"]  # flat SVG/PDF are vector
+        if options["mode"] == "art":
+            options["style"] = ArtStyle(wash=wash)
         return options
 
 

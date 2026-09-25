@@ -240,3 +240,73 @@ def test_lifting_restores_the_paper_image_not_a_flat_tone(tmp_path):
     stripe = arr[180, 216 + 2]  # x = 3 in (a tile boundary) + 2 px, inside the gap
     plain = arr[180, 216 + 40]
     assert stripe.mean() < plain.mean() - 40
+
+
+# --- art exports (PNG, and PDF/SVG as a raster-vector hybrid) -----------------------
+
+
+def _scene_and_lib():
+    objects = [_obj("lawn", box(1, 1, 9, 9), "lawn"), _obj("deck", box(3, 3, 6, 6), "deck", z=1)]
+    return _doc(), ResolvedScene(objects=objects), _library()
+
+
+def test_art_png_export_has_true_print_size_dpi_and_the_strip(tmp_path):
+    from landscape.render_art import render_art_to_png
+    from landscape.render_flat import DECORATION_STRIP_PT
+
+    doc, scene, lib = _scene_and_lib()
+    out = tmp_path / "art.png"
+    render_art_to_png(doc, scene, lib, out, dpi=72, scale_bar=True)
+
+    with Image.open(out) as img:
+        assert img.size == (360, 360 + DECORATION_STRIP_PT)
+        assert round(img.info["dpi"][0]) == 72
+        painted = np.asarray(img.convert("RGB"), float)
+    assert painted[180, 180][1] > painted[180, 180][2]  # the painting, not a blank page
+
+
+def test_art_pdf_embeds_the_painting_and_keeps_the_strip_vector(tmp_path):
+    import pdfplumber
+
+    from landscape.render_art import render_art_to_pdf
+    from landscape.render_flat import DECORATION_STRIP_PT
+
+    doc, scene, lib = _scene_and_lib()
+    out = tmp_path / "art.pdf"
+    render_art_to_pdf(doc, scene, lib, out, dpi=60, scale_bar=True, north_arrow=True)
+
+    with pdfplumber.open(out) as pdf:
+        page = pdf.pages[0]
+        assert (page.width, page.height) == (360, 360 + DECORATION_STRIP_PT)
+        assert len(page.images) == 1  # the painting, embedded once
+        image = page.images[0]
+        assert (round(image["x0"]), round(image["top"]), round(image["x1"]), round(image["bottom"])) == (0, 0, 360, 360)
+        assert "1:24" in page.extract_text()  # the strip is real text, not pixels
+
+
+def test_art_svg_embeds_the_painting_at_true_size(tmp_path):
+    from landscape.render_art import render_art_to_svg
+
+    doc, scene, lib = _scene_and_lib()
+    out = tmp_path / "art.svg"
+    render_art_to_svg(doc, scene, lib, out, dpi=40)
+
+    content = out.read_text()
+    assert 'width="360pt"' in content
+    assert "data:image/png" in content
+
+
+def test_one_dispatcher_serves_every_mode_and_format(tmp_path):
+    from landscape.render import check_output, render_to_file, takes_dpi
+
+    doc, scene, lib = _scene_and_lib()
+    for mode in ("flat", "art"):
+        for ext in (".png", ".svg", ".pdf"):
+            out = tmp_path / f"{mode}{ext}"
+            render_to_file(doc, scene, lib, out, mode=mode, dpi=40, show_legend=True)
+            assert out.stat().st_size > 0
+    assert takes_dpi("a.pdf", "art") and takes_dpi("a.png", "flat") and not takes_dpi("a.pdf", "flat")
+    with pytest.raises(ValueError, match="mode"):
+        check_output("a.png", "sketch")
+    with pytest.raises(ValueError, match="unsupported"):
+        check_output("a.jpg", "art")

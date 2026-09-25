@@ -2153,3 +2153,34 @@ def test_bad_extension_warns_before_asking_for_options(qtbot, tmp_path, monkeypa
 
     assert dialog is None  # no point choosing options for a file we can't write
     assert warnings
+
+
+
+def test_export_dialog_can_export_in_art_mode(qtbot, tmp_path, monkeypatch):
+    import pdfplumber
+
+    window = _open_editor(qtbot)
+    out = tmp_path / "plan.pdf"
+
+    def configure(dialog):
+        dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("art"))
+        dialog.wash_combo.setCurrentIndex(dialog.wash_combo.findData("layered"))
+        dialog.dpi_spin.setValue(36)
+        assert dialog.dpi_spin.isEnabled()  # art is a painting: DPI applies even to a PDF
+
+    _trigger_export(window, monkeypatch, out, configure)
+
+    with pdfplumber.open(out) as pdf:
+        assert len(pdf.pages[0].images) == 1  # the embedded painting
+        assert pdf.pages[0].images[0]["srcsize"][0] == round(40 * 36 / 72 * 36)
+
+
+def test_wash_choice_only_applies_to_art_mode(qtbot, tmp_path, monkeypatch):
+    window = _open_editor(qtbot)
+    dialog = _trigger_export(window, monkeypatch, tmp_path / "plan.pdf")
+
+    assert dialog.mode_combo.currentData() == "flat"
+    assert not dialog.wash_combo.isEnabled()
+    assert not dialog.dpi_spin.isEnabled()
+    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("art"))
+    assert dialog.wash_combo.isEnabled() and dialog.dpi_spin.isEnabled()

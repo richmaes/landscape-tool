@@ -534,3 +534,107 @@ def _dash(line: BaseGeometry, on: float, off: float) -> list[BaseGeometry]:
             parts.append(substring(part, pos, min(pos + on, part.length)))
             pos += on + off
     return parts
+
+
+# ---------------------------------------------------------------------------
+# Export (M6 + M7): PNG, and PDF/SVG as an honest raster-vector hybrid
+# ---------------------------------------------------------------------------
+#
+# The painting is inherently raster — soft washes, granulation and paper
+# grain have no vector equivalent — so PDF and SVG exports *embed* it as an
+# image at `dpi`, the painting's resolution. What stays vector is
+# everything that's crisp by nature: the scale bar, north arrow and legend
+# (the same code flat mode uses). The page keeps its true print size either
+# way. `dpi` therefore matters for every art format, not just PNG.
+
+ART_DEFAULT_DPI = 200.0
+
+
+def _art_page(
+    ctx: cairo.Context,
+    doc: SceneDocument,
+    scene: ResolvedScene,
+    materials: MaterialLibrary,
+    painting: Image.Image,
+    scale_bar: bool,
+    north_arrow: bool,
+    north_deg: float,
+    show_legend: bool,
+    show_annotations: bool,
+) -> None:
+    """Paint the rendered image over the drawing area of a context already
+    scaled to scene units, then the vector extras on top."""
+    from .render_flat import _draw_decoration_strip, _draw_legend, used_materials_in_scene
+
+    rgba = painting.convert("RGBA")
+    # cairo wants premultiplied BGRA; an opaque image needs only the swizzle
+    bgra = np.asarray(rgba, np.uint8)[..., [2, 1, 0, 3]].copy()
+    source = cairo.ImageSurface.create_for_data(
+        memoryview(bgra), cairo.FORMAT_ARGB32, rgba.width, rgba.height, rgba.width * 4
+    )
+    ctx.save()
+    ctx.scale(doc.page_width / rgba.width, doc.page_height / rgba.height)
+    ctx.set_source_surface(source, 0, 0)
+    ctx.get_source().set_filter(cairo.FILTER_GOOD)
+    ctx.paint()
+    ctx.restore()
+    source.finish()
+
+    if show_legend:
+        _draw_legend(ctx, used_materials_in_scene(scene, materials, show_annotations), doc.page_height)
+    if scale_bar or north_arrow:
+        _draw_decoration_strip(ctx, doc, scale_bar, north_arrow, north_deg)
+
+
+def _export_art(surface_factory, doc, scene, materials, path, dpi, style, scale_bar, north_arrow, north_deg,
+                show_legend, show_annotations):
+    from .render_flat import _page_size_pt
+
+    painting = render_art_image(doc, scene, materials, dpi=dpi, style=style, show_annotations=show_annotations)
+    width, height = _page_size_pt(doc, scale_bar or north_arrow)
+    surface = surface_factory(str(path), width, height)
+    ctx = cairo.Context(surface)
+    ctx.scale(doc.scale, doc.scale)
+    _art_page(ctx, doc, scene, materials, painting, scale_bar, north_arrow, north_deg, show_legend, show_annotations)
+    surface.finish()
+
+
+def render_art_to_pdf(doc, scene, materials, path, dpi: float = ART_DEFAULT_DPI, style: ArtStyle | None = None,
+                      scale_bar=False, north_arrow=False, north_deg=0.0, show_legend=False, show_annotations=False):
+    _export_art(cairo.PDFSurface, doc, scene, materials, path, dpi, style, scale_bar, north_arrow, north_deg,
+                show_legend, show_annotations)
+
+
+def render_art_to_svg(doc, scene, materials, path, dpi: float = ART_DEFAULT_DPI, style: ArtStyle | None = None,
+                      scale_bar=False, north_arrow=False, north_deg=0.0, show_legend=False, show_annotations=False):
+    def svg_surface(p, w, h):
+        surface = cairo.SVGSurface(p, w, h)
+        surface.set_document_unit(cairo.SVGUnit.PT)
+        return surface
+
+    _export_art(svg_surface, doc, scene, materials, path, dpi, style, scale_bar, north_arrow, north_deg,
+                show_legend, show_annotations)
+
+
+def render_art_to_png(doc, scene, materials, path, dpi: float = ART_DEFAULT_DPI, style: ArtStyle | None = None,
+                      scale_bar=False, north_arrow=False, north_deg=0.0, show_legend=False, show_annotations=False):
+    """Same page as the PDF, rasterised at `dpi`, with the DPI recorded in
+    the file (see render_flat.render_scene_to_png)."""
+    import io
+
+    from .render_flat import _page_size_pt
+
+    painting = render_art_image(doc, scene, materials, dpi=dpi, style=style, show_annotations=show_annotations)
+    width_pt, height_pt = _page_size_pt(doc, scale_bar or north_arrow)
+    px_per_point = dpi / 72.0
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, round(width_pt * px_per_point), round(height_pt * px_per_point))
+    ctx = cairo.Context(surface)
+    ctx.set_source_rgb(1, 1, 1)
+    ctx.paint()
+    ctx.scale(doc.scale * px_per_point, doc.scale * px_per_point)
+    _art_page(ctx, doc, scene, materials, painting, scale_bar, north_arrow, north_deg, show_legend, show_annotations)
+    buffer = io.BytesIO()
+    surface.write_to_png(buffer)
+    buffer.seek(0)
+    with Image.open(buffer) as img:
+        img.convert("RGB").save(str(path), format="PNG", dpi=(dpi, dpi))

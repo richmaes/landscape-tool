@@ -341,22 +341,13 @@ class EditorSession:
         if path is not None and path.exists():
             path.unlink()
 
-    def export(self, path: str | Path, **kwargs: Any) -> None:
-        """Render the current (edited) scene to an image file, reusing
-        M5's `render_flat` pipeline directly — export from the editor and
-        `landscape render` produce identical output for the same scene,
-        since they're the same three functions underneath."""
-        from .render_flat import render_scene_to_pdf, render_scene_to_png, render_scene_to_svg
+    def export(self, path: str | Path, mode: str = "flat", **kwargs: Any) -> None:
+        """Render the current (edited) scene to an image file through the
+        same dispatcher `landscape render` and export recipes use
+        (`render.render_to_file`), so the editor's export and the CLI's
+        produce identical output for the same scene and options. `mode` is
+        `flat` (M5) or `art` (M6); raises ValueError for an unsupported
+        mode or file type."""
+        from .render import render_to_file
 
-        renderers = {
-            ".svg": render_scene_to_svg,
-            ".pdf": render_scene_to_pdf,
-            ".png": render_scene_to_png,
-        }
-        out_path = Path(path)
-        renderer = renderers.get(out_path.suffix.lower())
-        if renderer is None:
-            raise ValueError(
-                f"unsupported export extension '{out_path.suffix}' (use .svg, .pdf, or .png)"
-            )
-        renderer(self.doc, self.resolved, self.materials, out_path, **kwargs)
+        render_to_file(self.doc, self.resolved, self.materials, Path(path), mode=mode, **kwargs)

@@ -1,9 +1,8 @@
 """CLI entry point: `landscape render scene.yaml --mode flat --out out/plan.png`
 
 Developer back door per the project decisions in TODO.md; the graphical
-editor (M8) is the primary interface. `--mode flat` is the M5 end-to-end
-path: load, resolve, render. `--mode art` still stubs out since M6 hasn't
-picked its texture techniques yet.
+editor (M8) is the primary interface. `--mode flat` is the M5 flat pastel
+render; `--mode art` is M6's watercolor-and-pencil painting.
 
 Run from the repo root: `--materials` defaults to `assets/materials.yaml`,
 resolved relative to the current directory, not installed as package data.
@@ -17,14 +16,8 @@ from pathlib import Path
 
 from .geometry import resolve_scene
 from .materials import load_materials
-from .render_flat import render_scene_to_pdf, render_scene_to_png, render_scene_to_svg
+from .render import check_output, render_to_file
 from .scene_io import load_scene
-
-_RENDERERS = {
-    ".svg": render_scene_to_svg,
-    ".pdf": render_scene_to_pdf,
-    ".png": render_scene_to_png,
-}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,8 +30,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode",
         choices=["flat", "art"],
         default="flat",
-        help="Render mode: flat pastel color-coding or hand-drawn pastel art",
+        help="Render mode: flat pastel color-coding or hand-drawn watercolor-and-pencil art",
     )
+    render.add_argument(
+        "--wash", choices=["diffuse", "layered"], default="diffuse", help="Art mode: watercolor wash technique"
+    )
+    render.add_argument("--paper-image", default=None, help="Art mode: a paper scan to paint on (PNG/JPEG)")
     render.add_argument("--out", required=True, help="Output file path (.svg, .pdf, or .png)")
     render.add_argument(
         "--materials", default="assets/materials.yaml", help="Path to a material library YAML file"
@@ -58,9 +55,10 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument(
         "--dpi",
         type=float,
-        default=72.0,
-        help="PNG only: pixels per inch of the drawing's print size (the scene's own scale); "
-        "also recorded in the file so it prints at that size",
+        default=None,
+        help="Pixels per inch of the drawing's print size (the scene's own scale), recorded in PNGs so they "
+        "print at that size. Flat mode: PNG only, default 72. Art mode: every format (it's the painting's "
+        "resolution, embedded in SVG/PDF), default 200",
     )
 
     export = subparsers.add_parser(
@@ -88,17 +86,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "render":
-        if args.mode == "art":
-            parser.exit(
-                1,
-                "landscape render --mode art: not yet implemented "
-                "(M6 hasn't picked its texture techniques yet)\n",
-            )
-
         out_path = Path(args.out)
-        renderer = _RENDERERS.get(out_path.suffix.lower())
-        if renderer is None:
-            parser.exit(1, f"landscape render: unsupported --out extension '{out_path.suffix}' (use .svg, .pdf, or .png)\n")
+        try:
+            check_output(out_path, args.mode)
+        except ValueError as exc:
+            parser.exit(1, f"landscape render: {exc}\n")
 
         doc = load_scene(args.scene)
         scene = resolve_scene(doc)
@@ -112,9 +104,13 @@ def main(argv: list[str] | None = None) -> int:
             "north_arrow": args.north_arrow,
             "north_deg": args.north_angle,
         }
-        if renderer is render_scene_to_png:
+        if args.dpi is not None:
             kwargs["dpi"] = args.dpi
-        renderer(doc, scene, materials, out_path, **kwargs)
+        if args.mode == "art":
+            from .render_art import ArtStyle
+
+            kwargs["style"] = ArtStyle(wash=args.wash, paper_image=args.paper_image)
+        render_to_file(doc, scene, materials, out_path, mode=args.mode, **kwargs)
         print(f"landscape render: wrote {out_path}")
 
     elif args.command == "export":

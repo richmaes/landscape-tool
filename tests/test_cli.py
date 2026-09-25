@@ -40,18 +40,40 @@ def test_edit_parses_rules_arg():
     assert args.rules == "rules/backyard.yaml"
 
 
-def test_art_mode_not_yet_implemented(capsys):
-    with pytest.raises(SystemExit) as exc_info:
-        main(["render", str(EXAMPLE_SCENE), "--mode", "art", "--out", "out/plan.png"])
-    assert exc_info.value.code == 1
-    assert "not yet implemented" in capsys.readouterr().err
+def test_render_art_mode_end_to_end(tmp_path):
+    out = tmp_path / "art.png"
+    exit_code = main(
+        ["render", str(EXAMPLE_SCENE), "--mode", "art", "--out", str(out), "--materials", str(DEFAULT_MATERIALS),
+         "--dpi", "30", "--wash", "layered"]
+    )
+    assert exit_code == 0
+    with Image.open(out) as img:
+        assert img.size == (round(40 * 36 / 72 * 30),) * 2
+        assert round(img.info["dpi"][0]) == 30
+
+
+def test_render_art_mode_defaults_to_200_dpi(tmp_path, monkeypatch):
+    """Without --dpi the CLI passes none, so each renderer's own default
+    applies: 200 for art (checked here without paying for a 200 DPI render
+    of the 40 ft example), 72 for flat PNG."""
+    import inspect
+
+    import landscape.cli as cli
+    from landscape.render_art import render_art_to_pdf
+
+    calls = []
+    monkeypatch.setattr(cli, "render_to_file", lambda *a, **k: calls.append(k))
+    main(["render", str(EXAMPLE_SCENE), "--mode", "art", "--out", str(tmp_path / "a.pdf"), "--materials", str(DEFAULT_MATERIALS)])
+
+    assert "dpi" not in calls[0]
+    assert inspect.signature(render_art_to_pdf).parameters["dpi"].default == 200
 
 
 def test_unsupported_extension_rejected(capsys):
     with pytest.raises(SystemExit) as exc_info:
         main(["render", str(EXAMPLE_SCENE), "--out", "out/plan.jpg", "--materials", str(DEFAULT_MATERIALS)])
     assert exc_info.value.code == 1
-    assert "unsupported --out extension" in capsys.readouterr().err
+    assert "unsupported output type '.jpg'" in capsys.readouterr().err
 
 
 def test_render_flat_end_to_end_png(tmp_path, capsys):

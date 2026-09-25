@@ -16,3 +16,5 @@ outputs:
     dpi: 150
   - out: ../out/backyard-technical.svg   # with the dashed annotations
     annotations: true
+  - out: ../out/backyard-art.pdf         # watercolor-and-pencil presentation drawing
+    mode: art

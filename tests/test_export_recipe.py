@@ -98,10 +98,11 @@ def test_a_default_dpi_is_ignored_for_vector_outputs(tmp_path):
     "outputs, message",
     [
         ("  - out: plan.jpg\n", "unsupported"),
-        ("  - out: plan.pdf\n    dpi: 300\n", "dpi only applies to .png"),
+        ("  - out: plan.pdf\n    dpi: 300\n", "dpi only applies to .png outputs in flat mode"),
         ("  - out: plan.png\n    colour: red\n", "unknown option 'colour'"),
         ("  - dpi: 300\n", "'out' is required"),
-        ("  - out: plan.png\n    mode: art\n", "art mode is not implemented yet"),
+        ("  - out: plan.png\n    mode: art\n    wash: splatter\n", "wash must be one of"),
+        ("  - out: plan.png\n    wash: layered\n", "wash only applies to mode: art"),
         ("  - out: plan.png\n    mode: sketch\n", "mode must be"),
         ("  - out: plan.png\n    legend: maybe\n", "legend must be true or false"),
         ("  - out: plan.png\n    dpi: lots\n", "dpi must be a number"),
@@ -163,3 +164,37 @@ def test_the_shipped_backyard_recipe_is_valid():
     options evolve."""
     recipe = load_recipe(REPO / "exports" / "backyard.yaml")
     assert recipe.outputs
+
+
+
+def test_art_mode_outputs_in_a_recipe(tmp_path):
+    """Art outputs take dpi in any format (the painting's resolution) and
+    their own wash; they sit alongside flat outputs in one recipe."""
+    import pdfplumber
+
+    recipe = _write_recipe(
+        tmp_path,
+        """
+outputs:
+  - out: art.pdf
+    mode: art
+    dpi: 30
+    wash: layered
+  - out: flat.png
+""",
+    )
+
+    run_recipe(load_recipe(recipe))
+
+    with pdfplumber.open(tmp_path / "art.pdf") as pdf:
+        assert pdf.pages[0].images[0]["srcsize"][0] == round(40 * 36 / 72 * 30)
+    assert (tmp_path / "flat.png").exists()
+    art_output = load_recipe(recipe).outputs[0]
+    assert art_output.mode == "art" and art_output.render_kwargs["style"].wash == "layered"
+
+
+def test_a_recipes_paper_image_is_relative_to_the_recipe(tmp_path):
+    (tmp_path / "scans").mkdir()
+    recipe = _write_recipe(tmp_path, "outputs:\n  - out: a.png\n    mode: art\n    paper_image: scans/cold-press.png\n")
+    style = load_recipe(recipe).outputs[0].render_kwargs["style"]
+    assert Path(style.paper_image) == tmp_path / "scans" / "cold-press.png"
