@@ -151,3 +151,12 @@ def test_unknown_overlay_names_are_rejected():
     session.load(_scene_copy())
     with pytest.raises(ValueError):
         session.set_overlay_position("north_arrow", 1, 1)
+
+
+def test_detail_lines_without_a_material_are_not_legend_items():
+    """Seams and similar linework ('deck_ne_seam') are drawing detail, not
+    things like the firepit that need a legend row."""
+    from shapely.geometry import LineString
+
+    scene = ResolvedScene(objects=[_obj("deck_ne_seam", LineString([(0, 0), (4, 0)]), None), _obj("firepit", Point(5, 5).buffer(1), None)])
+    assert [e.label for e in legend_entries(scene, _library())] == ["Firepit"]

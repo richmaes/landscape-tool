@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QFileSystemWatcher, QPointF, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPainterPathStroker, QPen, QWheelEvent
+from PySide6.QtGui import QBrush, QColor, QFontMetricsF, QPainter, QPainterPath, QPainterPathStroker, QPen, QWheelEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsPathItem,
     QGraphicsPixmapItem,
+    QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
@@ -572,6 +573,144 @@ def _add_annotation_item(
     font.setPointSizeF(0.8)
     text.setFont(font)
     text.setPos(centroid.x, page_height - centroid.y)
+
+
+class OverlayItem(QGraphicsPathItem):
+    """The legend box or the scale indicator on the design canvas: drawn
+    from `overlays.py`'s layout, dragged by the designer, and committed to
+    the document as a new origin point on release (`on_moved(name, x, y)`,
+    scene units, +y north).
+
+    Owns its press/move/release rather than using Qt's default drag, which
+    would also drag whatever object happens to be selected — the same trap
+    `SelectionHandle` hit. And like `EditableItem`, it never triggers a
+    scene rebuild mid-gesture: it just stays where it was dropped until the
+    next rebuild redraws it from the committed position. Its own path is
+    the small origin marker; everything else is child items."""
+
+    MARKER = 0.12  # origin marker radius, scene units
+
+    def __init__(self, name: str, origin_x: float, origin_y: float, page_height: float,
+                 on_moved: Callable[[str, float, float], None] | None):
+        marker = QPainterPath()
+        qx, qy = origin_x, page_height - origin_y
+        marker.addEllipse(QPointF(qx, qy), self.MARKER, self.MARKER)
+        marker.moveTo(qx - self.MARKER * 2, qy)
+        marker.lineTo(qx + self.MARKER * 2, qy)
+        marker.moveTo(qx, qy - self.MARKER * 2)
+        marker.lineTo(qx, qy + self.MARKER * 2)
+        super().__init__(marker)
+        self.name = name
+        self.origin = QPointF(origin_x, origin_y)
+        self._on_moved = on_moved
+        self._press_scene_pos = QPointF()
+        self._press_item_pos = QPointF()
+        self.setPen(QPen(QColor(30, 120, 220), 0.03))
+        self.setZValue(5000)
+        self.setCursor(Qt.OpenHandCursor)
+        self.setToolTip("Drag to move (its origin is the blue marker)")
+
+    def _marker_rect(self):
+        # not super().boundingRect(): for a path item with a pen, Qt's own
+        # boundingRect() calls the virtual shape() — which is overridden
+        # below in terms of this, an infinite recursion
+        return self.path().boundingRect().adjusted(-0.05, -0.05, 0.05, 0.05)
+
+    def shape(self) -> QPainterPath:
+        # grab it anywhere on the box/line, not just on the tiny marker
+        path = QPainterPath()
+        path.addRect(self.boundingRect())
+        return path
+
+    def boundingRect(self):
+        return self.childrenBoundingRect().united(self._marker_rect())
+
+    def mousePressEvent(self, event) -> None:
+        self._press_scene_pos = event.scenePos()
+        self._press_item_pos = self.pos()
+        self.setCursor(Qt.ClosedHandCursor)
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:
+        self.setPos(self._press_item_pos + (event.scenePos() - self._press_scene_pos))
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:
+        self.setCursor(Qt.OpenHandCursor)
+        event.accept()
+        moved = self.pos() - self._press_item_pos
+        if (moved.x() or moved.y()) and self._on_moved:
+            # the item's pos is an offset from where it was built; +y north is Qt -y
+            self._on_moved(self.name, self.origin.x() + self.pos().x(), self.origin.y() - self.pos().y())
+
+
+_OVERLAY_FONT_PX = 100  # see _overlay_text
+
+
+def _overlay_text(parent: QGraphicsItem, text: str, size: float, x: float, baseline_qt_y: float) -> None:
+    """Text `size` scene units tall (em), with its baseline at
+    `baseline_qt_y`. Qt clamps fractional point sizes (a 0.25 pt label came
+    out ~15 ft tall), so the font is set in whole pixels — which item
+    coordinates use directly — and the item is scaled down to size."""
+    item = QGraphicsSimpleTextItem(text, parent)
+    font = item.font()
+    font.setPixelSize(_OVERLAY_FONT_PX)
+    item.setFont(font)
+    item.setBrush(QBrush(TEXT_COLOR))
+    k = size / _OVERLAY_FONT_PX
+    item.setScale(k)
+    item.setPos(x, baseline_qt_y - QFontMetricsF(font).ascent() * k)
+
+
+def add_overlay_items(
+    gscene: QGraphicsScene,
+    doc: SceneDocument,
+    scene: ResolvedScene,
+    materials: MaterialLibrary,
+    line_width: float,
+    hidden_layers: set[str] | None = None,
+    on_moved: Callable[[str, float, float], None] | None = None,
+) -> dict[str, "OverlayItem"]:
+    """The drawing's legend box and scale indicator, as draggable canvas
+    items, laid out by `overlays.py` exactly as the renderers draw them.
+    Returns them by name."""
+    from .overlays import legend_entries, legend_layout, scale_indicator_layout
+
+    h = doc.page_height
+    # thinner than the drawing's outlines: legend swatches are small, and a
+    # full-weight outline swamps their color
+    pen = QPen(LINE_COLOR, line_width * 0.35)
+
+    legend = legend_layout(doc, legend_entries(scene, materials, hidden_layers or ()))
+    box = OverlayItem("legend", legend.x, legend.y, h, on_moved)
+    frame = QGraphicsRectItem(legend.x, h - legend.y, legend.width, legend.height, box)
+    frame.setBrush(QBrush(BACKGROUND_COLOR))
+    frame.setPen(pen)
+    _overlay_text(box, legend.title, legend.title_size, legend.title_x, h - legend.title_baseline_y)
+    for row in legend.rows:
+        top = h - row.swatch_y
+        if row.entry.shape == "square":
+            swatch = QGraphicsRectItem(row.swatch_x, top, row.swatch, row.swatch, box)
+        else:
+            swatch = QGraphicsEllipseItem(row.swatch_x, top, row.swatch, row.swatch, box)
+        swatch.setBrush(QBrush(QColor(row.entry.color)) if row.entry.color else QBrush(BACKGROUND_COLOR))
+        swatch.setPen(pen)
+        _overlay_text(box, row.entry.label, legend.text_size, row.text_x, h - row.baseline_y)
+    gscene.addItem(box)
+
+    bar = scale_indicator_layout(doc)
+    indicator = OverlayItem("scale_indicator", bar.x, bar.y, h, on_moved)
+    line = QPainterPath()
+    y = h - bar.y
+    line.moveTo(bar.x, y - bar.tick)
+    line.lineTo(bar.x, y)
+    line.lineTo(bar.x + bar.length, y)
+    line.lineTo(bar.x + bar.length, y - bar.tick)
+    stroke = QGraphicsPathItem(line, indicator)
+    stroke.setPen(QPen(LINE_COLOR, line_width * 1.3))
+    _overlay_text(indicator, bar.label, bar.text_size, bar.label_x, h - bar.label_baseline_y)
+    gscene.addItem(indicator)
+    return {"legend": box, "scale_indicator": indicator}
 
 
 def build_graphics_scene(
@@ -1425,6 +1564,12 @@ class EditorWindow(QMainWindow):
         )
         if self.session.rules:
             add_violation_overlays(gscene, self.session.violations, doc.page_height)
+        # kept by name: QGraphicsScene.items() leaves out hidden items, so
+        # during the art preview they can't be found that way
+        self._overlay_items = add_overlay_items(
+            gscene, doc, self.session.resolved, self.session.materials, _line_width_for_zoom(zoom),
+            hidden_layers=self._hidden_layers, on_moved=self.session.set_overlay_position,
+        )
         gscene.selectionChanged.connect(self._on_selection_changed)
         # PySide6 pitfall: QGraphicsView.setScene() doesn't keep the scene
         # alive on Python's side. Without this reference, the C++ object

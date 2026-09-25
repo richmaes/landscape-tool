@@ -100,6 +100,8 @@ def legend_entries(scene: ResolvedScene, materials: MaterialLibrary, hidden_laye
             continue
         material = materials.resolve(obj.material)
         if material.id == FALLBACK_ID:
+            if obj.geometry.geom_type not in ("Polygon", "MultiPolygon"):
+                continue  # seams and other linework are drawing detail, not items
             group = _item_group(obj.id)
             circles.setdefault(group, LegendEntry("circle", None, group.replace("_", " ").capitalize()))
         else:

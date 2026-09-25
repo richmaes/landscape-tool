@@ -10,7 +10,7 @@ import pytest
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QGraphicsPathItem, QGraphicsSimpleTextItem, QGraphicsView
+from PySide6.QtWidgets import QApplication, QGraphicsItem, QGraphicsPathItem, QGraphicsSimpleTextItem, QGraphicsView
 from shapely.geometry import box
 
 from landscape.editor import (
@@ -1769,8 +1769,10 @@ def _click_scene_point(window: EditorWindow, x_ft: float, y_ft: float) -> None:
 @pytest.mark.parametrize(
     "object_id, outline_point",
     [
-        # the keepout circle's westernmost point: c=(8.588, 4.965), r=6.0
-        ("firepit_keepout", (2.588, 4.965)),
+        # the keepout circle at 45 degrees NE: c=(8.588, 4.965), r=6.0 —
+        # not its west edge, which the legend box's default spot now covers,
+        # nor its north edge, which the ground-cover box's bottom edge shares
+        ("firepit_keepout", (12.831, 9.208)),
         # the ground-cover box's west edge, midway up — clear of the deck
         # and pad, which both start further east
         ("fence_enclosure", (4.991, 15.977)),
@@ -1806,7 +1808,7 @@ def test_dragging_the_keepout_outline_moves_it(qtbot):
     firepit?), so it has to be draggable like any other object."""
     window = _open_backyard_editor(qtbot)
     page_height = window.session.doc.page_height
-    start = QPointF(2.588, page_height - 4.965)  # on the keepout's west edge
+    start = QPointF(12.831, page_height - 9.208)  # on the keepout's edge, 45 degrees NE (its west edge is under the legend)
 
     _mouse_drag(window._view, start, start + QPointF(1.0, 0), steps=5)
 
@@ -1881,7 +1883,7 @@ def test_tab_uses_the_pointers_current_position_not_the_last_click(qtbot):
 
 def test_tab_reaches_a_dashed_outline_and_the_object_beneath_it(qtbot):
     window = _shown_backyard_editor(qtbot)
-    _click_scene_point(window, 2.588, 4.965)  # the keepout's west edge
+    _click_scene_point(window, 12.831, 9.208)  # the keepout's edge, 45 degrees NE, clear of other outlines
     assert window._selected_id == "firepit_keepout"
 
     _tab_on_canvas(window)
@@ -2389,3 +2391,107 @@ def test_size_clears_when_nothing_is_selected(qtbot):
     _select_only(window, "shed")
     window._view.scene().clearSelection()
     assert window._panel.size_label.text() == "—"
+
+
+# --- Legend box and scale indicator on the design canvas ----------------------------
+
+
+def _overlay(window: EditorWindow, name: str):
+    return window._overlay_items[name]
+
+
+def _texts(item) -> list[str]:
+    return [c.text() for c in item.childItems() if isinstance(c, QGraphicsSimpleTextItem)]
+
+
+def test_design_canvas_shows_a_legend_listing_materials_and_items(qtbot):
+    from landscape.overlays import legend_entries
+
+    window = _open_backyard_editor(qtbot)
+    legend = _overlay(window, "legend")
+    expected = [e.label for e in legend_entries(window.session.resolved, window.session.materials)]
+    assert "Firepit" in expected and "Water feature" in expected  # unassigned items get rows too
+    assert _texts(legend) == ["Legend", *expected]
+
+
+def test_design_canvas_shows_a_scale_indicator_with_its_length_above_the_line(qtbot):
+    window = _open_backyard_editor(qtbot)
+    scale = _overlay(window, "scale_indicator")
+    assert _texts(scale) == ["5 ft"]
+    label = next(c for c in scale.childItems() if isinstance(c, QGraphicsSimpleTextItem))
+    line_y = window.session.doc.page_height - scale.origin.y()  # Qt y-down
+    assert label.sceneBoundingRect().bottom() <= line_y + 0.01  # above the line
+
+
+def _drag_overlay(window: EditorWindow, name: str, dx_ft: float, dy_ft: float) -> None:
+    item = _overlay(window, name)
+    start = item.sceneBoundingRect().center()
+    _mouse_drag(window._view, start, start + QPointF(dx_ft, -dy_ft), steps=4)  # +y north is Qt -y
+
+
+@pytest.mark.parametrize("name", ["legend", "scale_indicator"])
+def test_dragging_an_overlay_moves_its_origin_and_is_undoable(qtbot, name):
+    from landscape.overlays import legend_entries, legend_layout, scale_indicator_layout
+
+    window = _open_backyard_editor(qtbot)
+    doc = window.session.doc
+    if name == "legend":
+        before = legend_layout(doc, legend_entries(window.session.resolved, window.session.materials))
+    else:
+        before = scale_indicator_layout(doc)
+
+    _drag_overlay(window, name, 3.0, 2.0)
+
+    placement = getattr(window.session.doc, name)
+    assert placement.x == pytest.approx(before.x + 3.0, abs=0.1)
+    assert placement.y == pytest.approx(before.y + 2.0, abs=0.1)
+    assert window.session.dirty
+    window._on_undo()
+    assert getattr(window.session.doc, name) is None
+
+
+def test_dragging_the_legend_never_drags_the_selected_object(qtbot):
+    """The class of bug found with the resize handles: Qt's default drag
+    moves the whole selection along with whatever is under the mouse."""
+    window = _open_backyard_editor(qtbot)
+    _select_only(window, "hot_tub")
+    t = window.session.doc.get("hot_tub").transform
+    before = (t.tx, t.ty)
+
+    _drag_overlay(window, "legend", 2.0, 1.0)
+
+    t = window.session.doc.get("hot_tub").transform
+    assert (t.tx, t.ty) == before
+
+
+def test_moved_overlay_is_drawn_at_its_new_place_after_a_rebuild(qtbot):
+    window = _open_backyard_editor(qtbot)
+    _drag_overlay(window, "scale_indicator", -4.0, 3.0)
+    placement = window.session.doc.scale_indicator
+
+    window._rebuild_scene()
+
+    origin = _overlay(window, "scale_indicator").origin
+    assert (origin.x(), origin.y()) == pytest.approx((placement.x, placement.y), abs=0.01)
+
+
+def test_overlays_are_not_editable_objects(qtbot):
+    """Not selectable, no resize/rotate handles, not in Tab's cycle."""
+    window = _open_backyard_editor(qtbot)
+    legend = _overlay(window, "legend")
+    assert not legend.flags() & QGraphicsItem.ItemIsSelectable
+    assert not isinstance(legend, EditableItem)
+
+
+def test_art_preview_hides_the_design_overlays(qtbot, art_calls):
+    window = _open_backyard_editor(qtbot)
+    window._art_action.trigger()
+    assert not _overlay(window, "legend").isVisible()
+    assert not _overlay(window, "scale_indicator").isVisible()
+
+
+
+def test_overlays_belong_to_the_current_scene(qtbot):
+    window = _open_backyard_editor(qtbot)
+    for name in ("legend", "scale_indicator"):
+        assert _overlay(window, name).scene() is window._view.scene()
