@@ -86,3 +86,14 @@ def test_render_flat_end_to_end_svg(tmp_path):
     assert exit_code == 0
     assert out.exists()  # --out's parent dir is created if missing
     assert "<svg" in out.read_text()
+
+
+def test_render_png_at_a_given_dpi(tmp_path):
+    out = tmp_path / "plan.png"
+    exit_code = main(
+        ["render", str(EXAMPLE_SCENE), "--out", str(out), "--materials", str(DEFAULT_MATERIALS), "--dpi", "150"]
+    )
+    assert exit_code == 0
+    with Image.open(out) as img:
+        assert round(img.info["dpi"][0]) == 150
+        assert img.size[0] == round(40 * 36 / 72 * 150)  # example.yaml: 40 ft at 36 pt/ft

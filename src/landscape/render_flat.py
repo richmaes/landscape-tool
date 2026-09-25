@@ -219,18 +219,36 @@ def render_scene_to_png(
     scene: ResolvedScene,
     materials: MaterialLibrary,
     path: str | Path,
-    dpi_scale: float = 1.0,
+    dpi: float = 72.0,
     **kwargs,
 ) -> None:
-    """Raster export. `dpi_scale` multiplies the base `doc.scale` (points
-    per real-world unit) for a higher-resolution PNG; M7 owns picking a
-    real DPI value, this just needs a knob for it to turn."""
-    width = int(doc.page_width * doc.scale * dpi_scale)
-    height = int(doc.page_height * doc.scale * dpi_scale)
+    """Raster export at `dpi` pixels per inch of the drawing's *print*
+    size. That size is fixed by the scene: `doc.scale` points per real-world
+    unit at 72 points per inch — for the backyard, 24 ft at 36 pt/ft is a
+    12 in square, the source PDF's own 1/2 in = 1 ft scale. The default,
+    72 DPI, is one pixel per point (the size this produced before DPI was
+    configurable).
+
+    The DPI is also written into the PNG's resolution metadata (pHYs), so
+    it prints at that true physical size rather than whatever DPI an image
+    app or print dialog assumes — pixel count alone doesn't fix it. cairo
+    can't write that chunk itself, so the image goes through Pillow."""
+    import io
+
+    from PIL import Image
+
+    px_per_point = dpi / 72.0
+    width = round(doc.page_width * doc.scale * px_per_point)
+    height = round(doc.page_height * doc.scale * px_per_point)
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
     ctx = cairo.Context(surface)
     ctx.set_source_rgb(1, 1, 1)
     ctx.paint()
-    ctx.scale(doc.scale * dpi_scale, doc.scale * dpi_scale)
+    ctx.scale(doc.scale * px_per_point, doc.scale * px_per_point)
     render_flat(ctx, scene, materials, doc.page_height, **kwargs)
-    surface.write_to_png(str(path))
+
+    buffer = io.BytesIO()
+    surface.write_to_png(buffer)
+    buffer.seek(0)
+    with Image.open(buffer) as img:
+        img.save(str(path), format="PNG", dpi=(dpi, dpi))

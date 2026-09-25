@@ -47,7 +47,13 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument(
         "--show-annotations", action="store_true", help="Draw annotation objects (technical view)"
     )
-    render.add_argument("--dpi-scale", type=float, default=1.0, help="PNG-only resolution multiplier")
+    render.add_argument(
+        "--dpi",
+        type=float,
+        default=72.0,
+        help="PNG only: pixels per inch of the drawing's print size (the scene's own scale); "
+        "also recorded in the file so it prints at that size",
+    )
 
     edit = subparsers.add_parser("edit", help="Open a scene in the graphical editor (M8)")
     edit.add_argument("scene", help="Path to a scene YAML file")
@@ -88,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
 
         kwargs = {"show_legend": args.legend, "show_annotations": args.show_annotations}
         if renderer is render_scene_to_png:
-            kwargs["dpi_scale"] = args.dpi_scale
+            kwargs["dpi"] = args.dpi
         renderer(doc, scene, materials, out_path, **kwargs)
         print(f"landscape render: wrote {out_path}")
 

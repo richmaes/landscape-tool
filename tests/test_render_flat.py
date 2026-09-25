@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from landscape.geometry import ResolvedObject, ResolvedScene, resolve_scene
@@ -49,6 +50,60 @@ def test_render_to_png_creates_correctly_sized_file(tmp_path):
     with Image.open(out) as img:
         assert img.size == (int(doc.page_width * doc.scale), int(doc.page_height * doc.scale))
 
+
+
+# --- M7: PNG at a real DPI, with correct physical sizing ----------------------
+
+
+def test_png_pixel_size_follows_dpi_and_the_drawings_print_size(tmp_path):
+    """The drawing's print size is fixed by the scene: `doc.scale` points
+    per foot, 72 points per inch — 24 ft at 36 pt/ft is 12 in, the same
+    1/2 in = 1 ft scale as the source PDF. At 300 DPI that's 3600 px."""
+    doc = load_scene(EXAMPLE_SCENE)
+    out = tmp_path / "scene.png"
+
+    render_scene_to_png(doc, resolve_scene(doc), load_materials(DEFAULT_MATERIALS), out, dpi=300)
+
+    inches_w = doc.page_width * doc.scale / 72
+    inches_h = doc.page_height * doc.scale / 72
+    with Image.open(out) as img:
+        assert img.size == (round(inches_w * 300), round(inches_h * 300))
+
+
+def test_png_records_its_dpi_so_it_prints_at_the_right_size(tmp_path):
+    """Pixel count alone doesn't fix a print size — without the PNG's own
+    resolution metadata (pHYs), print dialogs and image apps assume 72 or
+    96 DPI and print a 300 DPI render several times too large."""
+    doc = load_scene(EXAMPLE_SCENE)
+    out = tmp_path / "scene.png"
+
+    render_scene_to_png(doc, resolve_scene(doc), load_materials(DEFAULT_MATERIALS), out, dpi=300)
+
+    with Image.open(out) as img:
+        dpi_x, dpi_y = img.info["dpi"]
+        assert (round(dpi_x), round(dpi_y)) == (300, 300)
+        # and together they give the true physical size (PNG stores whole pixels
+        # per metre, so 300 DPI reads back as ~299.9994)
+        assert img.size[0] / dpi_x == pytest.approx(doc.page_width * doc.scale / 72, rel=1e-4)
+
+
+def test_png_content_scales_with_dpi_not_just_the_canvas(tmp_path):
+    """A 2x2 ft red square at 0..2 ft must cover 2/24 of the width at any
+    DPI — the drawing scales with the canvas, it isn't just padded."""
+    from landscape.schema import SceneDocument
+
+    doc = SceneDocument(page_width=24, page_height=24, scale=36)
+    scene = ResolvedScene(objects=[_obj("sq", box(0, 22, 2, 24), material="red")])  # top-left corner
+    out = tmp_path / "sq.png"
+
+    render_scene_to_png(doc, scene, _tiny_library(), out, dpi=144)
+
+    with Image.open(out) as img:
+        px_per_ft = 36 / 72 * 144  # 72 px per foot
+        inside = img.getpixel((int(px_per_ft * 1.9), int(px_per_ft * 1)))
+        outside = img.getpixel((int(px_per_ft * 2.1), int(px_per_ft * 1)))
+        assert inside[:3] == (255, 0, 0)
+        assert outside[:3] == (255, 255, 255)
 
 def test_render_to_svg_is_valid_svg(tmp_path):
     doc = load_scene(EXAMPLE_SCENE)
