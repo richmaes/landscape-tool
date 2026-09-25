@@ -40,6 +40,8 @@ class Material:
     # the same surface, so the palette check doesn't compare them to each
     # other — only to everything else.
     family: str | None = None
+    # default 3D base/height for objects of this material (see solids.py)
+    solid: dict[str, Any] | None = None
 
 
 _FALLBACK = Material(id="__fallback__", name="Missing material", color=FALLBACK_COLOR)
@@ -73,6 +75,7 @@ def load_materials(path: str | Path) -> MaterialLibrary:
             texture=mat_data.get("texture", {}),
             edge=mat_data.get("edge", {"weight": 1.0, "color": None}),
             family=mat_data.get("family"),
+            solid=mat_data.get("solid"),
         )
     return MaterialLibrary(materials=materials)
 

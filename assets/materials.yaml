@@ -1,4 +1,8 @@
-# Starter material library (M4). Kept separate from any scene file so a
+# Starter material library (M4). `solid: {base, height}` (feet) is a
+# material's default third dimension for the 3D view (M11) — objects can set
+# their own; ground surfaces leave it out and stay flat.
+#
+# (M4 notes:) Kept separate from any scene file so a
 # palette can be swapped without touching scene YAML. `color` is the flat
 # fill for M5 and the watercolor pigment for M6's art mode; `edge` is the
 # flat-mode outline. `texture` is art mode's pencil recipe
@@ -47,6 +51,7 @@ materials:
   # the same surface, so the palette check only compares them to other
   # materials. All share the same hatch texture.
   deck:
+    solid: {height: 1.5}
     name: Deck (natural)
     family: deck
     color: "#E0B27A"
@@ -54,6 +59,7 @@ materials:
     edge: {weight: 1.0, color: null}
 
   deck_dark:
+    solid: {height: 1.5}
     name: Deck (dark wood)
     family: deck
     color: "#6F4A35"
@@ -61,6 +67,7 @@ materials:
     edge: {weight: 1.0, color: null}
 
   deck_cedar:
+    solid: {height: 1.5}
     name: Deck (cedar)
     family: deck
     color: "#CE8A5A"
@@ -68,6 +75,7 @@ materials:
     edge: {weight: 1.0, color: null}
 
   deck_weathered:
+    solid: {height: 1.5}
     name: Deck (weathered grey)
     family: deck
     color: "#BFB6A8"
@@ -88,6 +96,7 @@ materials:
 
   fence:
     name: Fence
+    solid: {height: 6}
     color: "#E4DCC8"
     texture: {style: none}
     edge: {weight: 1.0, color: null}

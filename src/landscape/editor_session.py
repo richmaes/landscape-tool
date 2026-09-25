@@ -279,6 +279,33 @@ class EditorSession:
         self.recompute()
         self.autosave()
 
+    def set_solid(self, object_id: str, base: float | None = None, height: float | None = None) -> None:
+        """Set an object's own 3D base and/or height (feet), for the 3D view.
+        A value left as None keeps what the object has now (its own solid,
+        or what it inherits). Undoable; saved as a compact `solid: {base,
+        height}`."""
+        from .dimensions import _num
+        from .schema import Solid
+        from .solids import effective_solid
+
+        for value in (base, height):
+            if value is not None and value < 0:
+                raise ValueError("base and height can't be negative")
+        current = effective_solid(self.resolved.get(object_id), self.materials)
+        solid = Solid(
+            base=float(base if base is not None else current.base),
+            height=float(height if height is not None else current.height),
+        )
+        self.push_undo()
+        self.doc.get(object_id).solid = solid
+        raw_obj = self.raw_objects.get(object_id)
+        if raw_obj is not None:
+            node = CommentedMap(base=_num(solid.base), height=_num(solid.height))
+            node.fa.set_flow_style()
+            _set_keeping_trailing_gap(raw_obj, "solid", node)
+        self.recompute()
+        self.autosave()
+
     def set_pattern(self, object_id: str, pattern: str) -> None:
         """Choose a paver layout for one object (see `pavers.PATTERNS`),
         overriding its material's default. Undoable; saved as `pattern:`."""

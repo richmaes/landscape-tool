@@ -66,6 +66,7 @@ class ResolvedObject:
     annotation: bool
     rule: str | None = None  # set for keepout objects
     pattern: str | None = None  # the object's own paver pattern, if it chose one
+    solid: "Solid | None" = None  # the object's own 3D base/height (a fence's from its `height`)
 
 
 @dataclass
@@ -107,9 +108,22 @@ class ResolvedScene:
                         annotation=obj.annotation,
                         rule=obj.rule,
                         pattern=obj.pattern,
+                        solid=obj.solid,
                     )
                 )
         return ResolvedScene(objects=cropped)
+
+
+def _object_solid(obj: SceneObject):
+    """The object's own 3D solid; a fence line without one stands at its own
+    `height` (the fence field that predates the 3D view)."""
+    from .schema import FenceLine, Solid
+
+    if obj.solid is not None:
+        return obj.solid
+    if isinstance(obj.primitive, FenceLine):
+        return Solid(base=0.0, height=obj.primitive.height)
+    return None
 
 
 def resolve_scene(doc: SceneDocument) -> ResolvedScene:
@@ -136,6 +150,7 @@ def resolve_scene(doc: SceneDocument) -> ResolvedScene:
             annotation=obj.annotation,
             rule=rules[obj.id],
             pattern=obj.pattern,
+            solid=_object_solid(obj),
         )
         for obj in doc.objects
     ]

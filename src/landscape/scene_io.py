@@ -18,6 +18,7 @@ from ruamel.yaml import YAML
 from .schema import (
     Definition,
     Placement,
+    Solid,
     SceneDocument,
     SceneObject,
     SchemaError,
@@ -144,7 +145,21 @@ def _parse_object(obj_id: str, obj_data: Any, doc: SceneDocument) -> SceneObject
         transform=parse_transform(obj_data.get("transform")),
         boolean=parse_boolean(obj_data.get("boolean")),
         pattern=_parse_pattern(obj_data),
+        solid=parse_solid(obj_data.get("solid")),
     )
+
+
+def parse_solid(data: Any) -> Solid | None:
+    """`solid: {base, height}` (feet, both optional, not negative)."""
+    if data is None:
+        return None
+    try:
+        solid = Solid(base=float(data.get("base", 0)), height=float(data.get("height", 0)))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise SchemaError("'solid' must be a mapping like {base: 0, height: 1.5} (feet)") from exc
+    if solid.base < 0 or solid.height < 0:
+        raise SchemaError("'solid' base and height can't be negative")
+    return solid
 
 
 def _parse_pattern(obj_data: Any) -> str | None:

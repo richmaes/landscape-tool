@@ -370,6 +370,7 @@ class SceneObject:
     transform: Transform = field(default_factory=Transform)
     boolean: BooleanOp | None = None
     pattern: str | None = None  # paver layout, overriding the material's default (see pavers.py)
+    solid: Solid | None = None  # 3D base/height, overriding the material's default (see solids.py)
 
 
 @dataclass
@@ -380,6 +381,16 @@ class Definition:
     id: str
     primitive: Primitive
     material: str | None = None
+
+
+@dataclass
+class Solid:
+    """An object's third dimension for the 3D view (M11): its bottom sits
+    `base` above the ground and it rises `height` from there (feet). A
+    nested `solid:` key because `height` already means a rect's 2D height."""
+
+    base: float = 0.0
+    height: float = 0.0
 
 
 @dataclass

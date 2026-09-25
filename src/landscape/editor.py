@@ -1053,6 +1053,19 @@ class PropertiesPanel(QWidget):
         self.size_height = self._size_spin()
         self.size_label = QLabel("—")
         self.size_label.setToolTip("Actual size after scaling (updates live while resizing)")
+        # Height (3D view): how tall the object stands, and how high its
+        # bottom sits — its own value or the one it inherits
+        self.solid_height = self._size_spin(minimum=0.0)
+        self.solid_height.setToolTip("How tall the object stands in the 3D view")
+        self.solid_base = self._size_spin(minimum=0.0)
+        self.solid_base.setPrefix("from ")
+        self.solid_base.setToolTip("How high above the ground its bottom sits (e.g. a tub on its pad)")
+        height_row = QWidget()
+        height_layout = QHBoxLayout(height_row)
+        height_layout.setContentsMargins(0, 0, 0, 0)
+        height_layout.addWidget(self.solid_height)
+        height_layout.addWidget(self.solid_base)
+        self._height_row = height_row
         size_row = QWidget()
         size_layout = QHBoxLayout(size_row)
         size_layout.setContentsMargins(0, 0, 0, 0)
@@ -1100,6 +1113,7 @@ class PropertiesPanel(QWidget):
         layout = QFormLayout(self)
         layout.addRow("Object", self.id_label)
         layout.addRow("Size", self._size_row)
+        layout.addRow("Height", self._height_row)
         layout.addRow("Rotation", self.rotation_spin)
         layout.addRow("Scale", self.scale_spin)
         layout.addRow("Material", self.material_combo)
@@ -1209,9 +1223,9 @@ class PropertiesPanel(QWidget):
             widget.setVisible(False)
 
     @staticmethod
-    def _size_spin() -> QDoubleSpinBox:
+    def _size_spin(minimum: float = 0.01) -> QDoubleSpinBox:
         spin = QDoubleSpinBox()
-        spin.setRange(0.01, 10000)
+        spin.setRange(minimum, 10000)
         spin.setDecimals(2)
         spin.setSingleStep(0.25)
         # commit on Enter / leaving the box / an arrow click, not per
@@ -1241,6 +1255,13 @@ class PropertiesPanel(QWidget):
             spin.setValue(value or 0.0)
             spin.blockSignals(False)
         self.size_width.setPrefix("⌀ " if dims.diameter_only else "")
+
+    def show_solid(self, solid, units: str) -> None:
+        for spin, value in ((self.solid_height, solid.height), (self.solid_base, solid.base)):
+            spin.blockSignals(True)
+            spin.setSuffix(f" {units}")
+            spin.setValue(value)
+            spin.blockSignals(False)
 
     def size_text(self) -> str:
         """What the Size row currently says, as text (for tests and tooltips)."""
@@ -1427,6 +1448,8 @@ class EditorWindow(QMainWindow):
         self._panel.pattern_combo.currentIndexChanged.connect(self._on_pattern_changed)
         self._panel.size_width.valueChanged.connect(lambda v: self._on_size_edited("width", v))
         self._panel.size_height.valueChanged.connect(lambda v: self._on_size_edited("height", v))
+        self._panel.solid_height.valueChanged.connect(lambda v: self._on_solid_edited("height", v))
+        self._panel.solid_base.valueChanged.connect(lambda v: self._on_solid_edited("base", v))
         self._panel.apply_relation_button.clicked.connect(self._on_apply_relation)
         self._panel.clear_relation_button.clicked.connect(self._on_clear_relation)
 
@@ -1867,6 +1890,7 @@ class EditorWindow(QMainWindow):
             all_ids = [o.id for o in self.session.doc.objects]
             self._panel.show_object(items[0].scene_object, all_ids)
             self._show_selected_size()
+            self._show_selected_solid()
             self._update_selection_handles(items[0])
         else:
             self._selected_id = None
@@ -1961,6 +1985,26 @@ class EditorWindow(QMainWindow):
             )
         geom = self.session.resolved.get(self._selected_id).geometry
         self._panel.show_size(dims, self.session.doc.units, dimensions_text(geom, factor, self.session.doc.units))
+
+    def _show_selected_solid(self) -> None:
+        from .solids import effective_solid
+
+        if self._selected_id:
+            solid = effective_solid(self.session.resolved.get(self._selected_id), self.session.materials)
+            self._panel.show_solid(solid, self.session.doc.units)
+
+    def _on_solid_edited(self, which: str, value: float) -> None:
+        """A height or base typed into the Height row: saved on the object
+        itself (overriding what it inherited), for the 3D view."""
+        if not self._selected_id:
+            return
+        try:
+            self.session.set_solid(self._selected_id, **{which: value})
+        except ValueError as exc:
+            self.statusBar().showMessage(f"Can't set height: {exc}")
+            self._show_selected_solid()
+            return
+        self._rebuild_scene()
 
     def _on_size_edited(self, which: str, value: float) -> None:
         """A width/height (or diameter) typed into the Size row: reshape the
