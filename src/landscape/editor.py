@@ -33,7 +33,7 @@ import math
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QFileSystemWatcher, QPointF, Qt
+from PySide6.QtCore import QFileSystemWatcher, QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPainterPathStroker, QPen, QWheelEvent
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsPathItem,
+    QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
@@ -687,6 +688,8 @@ class SceneGraphicsView(QGraphicsView):
 
     ZOOM_PER_TICK = 1.05  # was 1.15; that felt too aggressive per scroll tick
 
+    zoomed = Signal()  # after every wheel zoom step
+
     def __init__(self, scene: QGraphicsScene | None = None):
         super().__init__(scene)
         self.setRenderHint(QPainter.Antialiasing)
@@ -704,6 +707,7 @@ class SceneGraphicsView(QGraphicsView):
     def wheelEvent(self, event: QWheelEvent) -> None:
         factor = self.ZOOM_PER_TICK if event.angleDelta().y() > 0 else 1 / self.ZOOM_PER_TICK
         self.scale(factor, factor)
+        self.zoomed.emit()
 
     def mousePressEvent(self, event) -> None:
         self._pointer_pos = event.position().toPoint()
@@ -1034,6 +1038,11 @@ class ExportOptionsDialog(QDialog):
         return options
 
 
+ART_PREVIEW_MIN_DPI = 30.0
+ART_PREVIEW_MAX_DPI = 200.0
+_ART_PREVIEW_CACHE_SIZE = 6
+
+
 class EditorWindow(QMainWindow):
     """A thin Qt wrapper around `EditorSession`: this class owns widgets,
     draw calls, and event wiring; `self.session` owns the actual scene
@@ -1062,8 +1071,18 @@ class EditorWindow(QMainWindow):
         self._file_watcher.fileChanged.connect(self._on_file_changed_externally)
         self._layers_menu = None
         self._last_export_options: dict | None = None  # pre-fills the next File > Export
+        # Design / Art preview (M6). The preview is a read-only painting of
+        # the scene laid over the page; see _show_art_preview.
+        self._art_mode = False
+        self._art_cache: dict[tuple, tuple[float, "QPixmap"]] = {}  # key -> (dpi, pixmap), oldest first
+        self._art_rendered_dpi = 0.0
+        self._art_zoom_timer = QTimer(self)
+        self._art_zoom_timer.setSingleShot(True)
+        self._art_zoom_timer.setInterval(250)  # re-render once the wheel settles, not on every tick
+        self._art_zoom_timer.timeout.connect(self._on_art_zoom_settled)
 
         self._view = SceneGraphicsView()
+        self._view.zoomed.connect(self._on_view_zoomed)
         self._panel = PropertiesPanel(self.session.materials)
         self._panel.rotation_spin.valueChanged.connect(self._on_rotation_changed)
         self._panel.scale_spin.valueChanged.connect(self._on_scale_changed)
@@ -1128,6 +1147,24 @@ class EditorWindow(QMainWindow):
 
         self._layers_menu = self.menuBar().addMenu("&Layers")
 
+        from PySide6.QtGui import QActionGroup
+
+        view_menu = self.menuBar().addMenu("&View")
+        mode_group = QActionGroup(self)
+        mode_group.setExclusive(True)
+        self._design_action = view_menu.addAction("&Design")
+        self._design_action.setShortcut(QKeySequence("Ctrl+1"))
+        self._design_action.setToolTip("Edit the plan: flat colors, selectable shapes (Ctrl+1)")
+        self._art_action = view_menu.addAction("&Art preview")
+        self._art_action.setShortcut(QKeySequence("Ctrl+2"))
+        self._art_action.setToolTip("Preview the watercolor-and-pencil art render; read-only (Ctrl+2)")
+        for action in (self._design_action, self._art_action):
+            action.setCheckable(True)
+            mode_group.addAction(action)
+        self._design_action.setChecked(True)
+        self._design_action.triggered.connect(lambda: self._set_art_mode(False))
+        self._art_action.triggered.connect(lambda: self._set_art_mode(True))
+
         toolbar = self.addToolBar("File")
         toolbar.setMovable(False)
         toolbar.addAction(self._save_action)
@@ -1136,6 +1173,9 @@ class EditorWindow(QMainWindow):
         # A widget in a toolbar is shown/hidden through the QAction that
         # addWidget() returns, not the widget's own setVisible().
         self._unsaved_label_action = toolbar.addWidget(self._unsaved_label)
+        toolbar.addSeparator()
+        toolbar.addAction(self._design_action)
+        toolbar.addAction(self._art_action)
 
         create_menu = self.menuBar().addMenu("&Create")
         for kind in CREATABLE_PRIMITIVE_KINDS:
@@ -1355,11 +1395,93 @@ class EditorWindow(QMainWindow):
         old_transform = self._view.transform()
         self._view.setScene(gscene)
         self._view.setTransform(old_transform)
-        if previously_selected:
+        if self._art_mode:
+            self._show_art_preview()  # a rebuild (undo, layer toggle, ...) re-paints the preview
+        elif previously_selected:
             self._select_item_by_id(previously_selected)
         self._update_status_bar()
+        if self._art_mode:  # after the rule-violation summary, which would otherwise replace it
+            self.statusBar().showMessage("Art preview — read-only. Switch to Design (Ctrl+1) to edit.")
         self._undo_action.setEnabled(self.session.can_undo)
         self._redo_action.setEnabled(self.session.can_redo)
+
+    # --- Design / Art preview ---------------------------------------------
+
+    def _set_art_mode(self, on: bool) -> None:
+        if on == self._art_mode:
+            return
+        self._art_mode = on
+        self._rebuild_scene()  # rebuilds the design items, then (if on) paints over them
+
+    def _art_preview_dpi(self) -> float:
+        """About one rendered pixel per screen pixel at the current zoom —
+        sharp without paying for print resolution — clamped."""
+        doc = self.session.doc
+        px_per_ft = self._view.transform().m11() * self._view.devicePixelRatioF()
+        return min(max(px_per_ft * 72.0 / doc.scale, ART_PREVIEW_MIN_DPI), ART_PREVIEW_MAX_DPI)
+
+    def _art_pixmap(self, dpi: float):
+        """The painting for the current document, layers and annotations,
+        from a small cache keyed by `session.revision` — so toggling back
+        and forth, or undoing to an already-painted state, costs nothing.
+        A cached render is reused if it's at least as sharp as asked for."""
+        from PySide6.QtGui import QImage, QPixmap
+        from PySide6.QtWidgets import QApplication
+
+        from . import render_art
+        from .geometry import ResolvedScene
+
+        key = (self.session.revision, frozenset(self._hidden_layers), self._show_annotations)
+        cached = self._art_cache.get(key)
+        if cached and cached[0] >= dpi * 0.95:
+            return cached
+
+        scene = ResolvedScene(objects=[o for o in self.session.resolved.objects if o.layer not in self._hidden_layers])
+        self.statusBar().showMessage("Rendering art preview…")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            image = render_art.render_art_image(
+                self.session.doc, scene, self.session.materials, dpi=dpi, show_annotations=self._show_annotations
+            )
+        finally:
+            QApplication.restoreOverrideCursor()
+        data = image.tobytes()
+        qimage = QImage(data, image.width, image.height, image.width * 3, QImage.Format_RGB888).copy()
+        entry = (dpi, QPixmap.fromImage(qimage))
+        self._art_cache.pop(key, None)
+        self._art_cache[key] = entry
+        while len(self._art_cache) > _ART_PREVIEW_CACHE_SIZE:
+            self._art_cache.pop(next(iter(self._art_cache)))
+        return entry
+
+    def _show_art_preview(self) -> None:
+        """Hide every design item and lay the painting over the page. The
+        preview is read-only: nothing under it is visible or clickable, and
+        any selection is cleared (which also removes the handles)."""
+        scene = self._view.scene()
+        scene.clearSelection()
+        for item in scene.items():
+            if item.parentItem() is None:
+                item.setVisible(False)
+        dpi, pixmap = self._art_pixmap(self._art_preview_dpi())
+        self._art_rendered_dpi = dpi
+        doc = self.session.doc
+        preview = QGraphicsPixmapItem(pixmap)
+        preview.setTransformationMode(Qt.SmoothTransformation)
+        preview.setScale(doc.page_width / pixmap.width())  # pixels -> scene feet
+        preview.setZValue(10_000)
+        preview.setAcceptedMouseButtons(Qt.NoButton)
+        scene.addItem(preview)
+
+    def _on_view_zoomed(self) -> None:
+        if self._art_mode:
+            self._art_zoom_timer.start()
+
+    def _on_art_zoom_settled(self) -> None:
+        """Re-paint when zooming in has made the current render visibly soft;
+        zooming out never needs it (the existing render is sharper still)."""
+        if self._art_mode and self._art_preview_dpi() > self._art_rendered_dpi * 1.3:
+            self._rebuild_scene()
 
     def _update_status_bar(self) -> None:
         if not self.session.rules:

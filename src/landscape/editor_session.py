@@ -127,6 +127,14 @@ class EditorSession:
         after undoing never gets mistaken for the saved state."""
         return self._state_id != self._saved_state_id
 
+    @property
+    def revision(self) -> int:
+        """An id for the document's current content: changes with every
+        edit, and returns to an earlier value when undo/redo returns to that
+        earlier content — so it can key a cache of anything derived from
+        the document (the editor's art preview)."""
+        return self._state_id
+
     def _notify_state_change(self) -> None:
         if self.on_state_change:
             self.on_state_change()

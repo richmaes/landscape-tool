@@ -2184,3 +2184,156 @@ def test_wash_choice_only_applies_to_art_mode(qtbot, tmp_path, monkeypatch):
     assert not dialog.dpi_spin.isEnabled()
     dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("art"))
     assert dialog.wash_combo.isEnabled() and dialog.dpi_spin.isEnabled()
+
+
+# --- Design / Art preview toggle (M6) -----------------------------------------
+
+
+@pytest.fixture
+def art_calls(monkeypatch):
+    """Record every art render the editor asks for (and still render it,
+    for real, at whatever DPI it chose)."""
+    import landscape.render_art as render_art
+
+    calls = []
+    real = render_art.render_art_image
+
+    def recording(doc, scene, materials, dpi=150.0, style=None, show_annotations=False):
+        calls.append({"dpi": dpi, "ids": {o.id for o in scene.objects}, "show_annotations": show_annotations})
+        return real(doc, scene, materials, dpi=dpi, style=style, show_annotations=show_annotations)
+
+    monkeypatch.setattr(render_art, "render_art_image", recording)
+    return calls
+
+
+def _preview_item(window: EditorWindow):
+    from PySide6.QtWidgets import QGraphicsPixmapItem
+
+    items = [i for i in window._view.scene().items() if isinstance(i, QGraphicsPixmapItem)]
+    return items[0] if items else None
+
+
+def _visible_editables(window: EditorWindow):
+    return [i for i in window._view.scene().items() if isinstance(i, EditableItem) and i.isVisible()]
+
+
+def test_toolbar_switches_between_design_and_art_preview(qtbot, art_calls):
+    window = _open_editor(qtbot)
+    assert window._design_action.isChecked() and not window._art_action.isChecked()
+    assert _preview_item(window) is None
+
+    window._art_action.trigger()
+
+    assert window._art_action.isChecked() and not window._design_action.isChecked()
+    preview = _preview_item(window)
+    assert preview is not None
+    doc = window.session.doc
+    rect = preview.sceneBoundingRect()  # covers exactly the page, in scene feet
+    assert (round(rect.width(), 3), round(rect.height(), 3)) == (doc.page_width, doc.page_height)
+    assert _visible_editables(window) == []  # the painting replaces the editable shapes
+    assert len(art_calls) == 1
+
+    window._design_action.trigger()
+
+    assert _preview_item(window) is None
+    assert _visible_editables(window)
+
+
+def test_art_preview_is_read_only(qtbot, art_calls):
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    assert window._selection_handles
+
+    window._art_action.trigger()
+
+    assert window._selection_handles == []  # selection cleared on entry
+    shed_centre = window.session.resolved.get("shed").geometry.centroid
+    _click_scene_point(window, shed_centre.x, shed_centre.y)
+    assert window._selected_id is None
+
+
+def test_preview_dpi_follows_the_zoom(qtbot, art_calls):
+    """Rendered at about screen resolution, so it's sharp without paying
+    for print DPI; clamped so a far zoom-in can't ask for a huge render."""
+    from landscape.editor import ART_PREVIEW_MAX_DPI, ART_PREVIEW_MIN_DPI
+
+    window = _open_editor(qtbot)
+    window._art_action.trigger()
+    zoom = window._view.transform().m11() * window._view.devicePixelRatioF()
+    expected = zoom * 72 / window.session.doc.scale
+    assert art_calls[-1]["dpi"] == pytest.approx(min(max(expected, ART_PREVIEW_MIN_DPI), ART_PREVIEW_MAX_DPI), rel=0.01)
+
+
+def test_zooming_in_re_renders_the_preview_sharper(qtbot, art_calls):
+    window = _open_editor(qtbot)
+    window._art_action.trigger()
+    first_dpi = art_calls[-1]["dpi"]
+
+    for _ in range(25):  # ~3.4x in
+        QApplication.sendEvent(window._view.viewport(), _wheel_event(120))
+
+    qtbot.waitUntil(lambda: len(art_calls) >= 2, timeout=3000)
+    assert art_calls[-1]["dpi"] > first_dpi * 1.5
+
+
+def test_switching_back_and_forth_without_edits_reuses_the_render(qtbot, art_calls):
+    window = _open_editor(qtbot)
+    window._art_action.trigger()
+    window._design_action.trigger()
+    window._art_action.trigger()
+    assert len(art_calls) == 1
+
+
+def test_undo_in_art_preview_re_renders_and_stays_in_preview(qtbot, art_calls):
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    window._panel.rotation_spin.setValue(40)
+    window._art_action.trigger()
+    renders = len(art_calls)
+
+    window._on_undo()
+
+    assert len(art_calls) == renders + 1
+    assert _preview_item(window) is not None
+    assert _visible_editables(window) == []
+
+
+def test_undo_back_to_an_already_previewed_state_reuses_that_render(qtbot, art_calls):
+    """The cache is keyed by the document's state, so returning to a state
+    that was already painted costs nothing."""
+    window = _open_editor(qtbot)
+    window._art_action.trigger()  # render 1: the loaded state
+    window._design_action.trigger()
+    _select_only(window, "shed")
+    window._panel.rotation_spin.setValue(40)
+    window._art_action.trigger()  # render 2: the edited state
+    window._on_undo()  # back to the loaded state: cached
+    assert len(art_calls) == 2
+
+
+def test_art_preview_respects_hidden_layers(qtbot, art_calls):
+    window = _open_editor(qtbot)
+    layer = window.session.doc.get("shed").layer
+    window._on_layer_toggled(layer, False)
+
+    window._art_action.trigger()
+
+    hidden = {o.id for o in window.session.doc.objects if o.layer == layer}
+    assert hidden and not (hidden & art_calls[-1]["ids"])
+
+
+def test_view_menu_offers_the_same_switch_with_shortcuts(qtbot):
+    from PySide6.QtGui import QKeySequence
+
+    window = _open_editor(qtbot)
+    view_menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "&View")
+    assert window._design_action in view_menu.actions() and window._art_action in view_menu.actions()
+    assert window._design_action.shortcut() == QKeySequence("Ctrl+1")
+    assert window._art_action.shortcut() == QKeySequence("Ctrl+2")
+
+
+
+def test_art_preview_says_it_is_read_only(qtbot, art_calls):
+    window = _open_editor(qtbot)
+    window._art_action.trigger()
+    assert "Art preview" in window.statusBar().currentMessage()
