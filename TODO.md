@@ -443,15 +443,15 @@ Gaps found, most important first:
 
 
 
-## M11 — 3D view  *(requirements captured 2026-09-25; not started)*
+## M11 — 3D view  *(requirements captured and answered 2026-09-25; PyVista prototype works; not started in the project)*
 
 A third view — **Design | Art preview | 3D view** — showing the backyard in perspective from a camera placed in the plan. Full requirements, proposed default heights and open questions: `docs/3d-view-requirements.md`. Decide its open questions (heights, camera controls, style, renderer technology) before building.
 
 **Camera**
-- [ ] Camera model: `id`, `x`, `y`, `z` (eye height), `heading` (degrees clockwise from plan-north, matching `north_deg`), `pitch`, `fov`; several named cameras per scene
+- [ ] Camera model: `id`, `x`, `y`, `z` (eye height), a **look-at point** `look_x`/`look_y`/`look_z` (decided — Rich), `fov`; several named cameras per scene
 - [ ] Schema + round-trip: optional top-level `cameras:` list, written only once one exists (untouched files stay byte-identical); validation with line numbers
-- [ ] Design-mode camera marker: position + heading/field-of-view wedge on the canvas; drag to move, drag a handle to turn — undoable, saved, never drags the selected object, recomputes on release
-- [ ] Properties panel for a selected camera: X, Y, Z, heading, pitch, field of view as typed values
+- [ ] Design-mode camera marker plus a draggable **look-at marker** joined by a line, with the field-of-view wedge; drag either — undoable, saved, never drags the selected object, recomputes on release
+- [ ] Properties panel for a selected camera: X, Y, Z, look-at X, Y, Z, field of view as typed values (heading/tilt shown read-only)
 - [ ] Create / delete / rename cameras; a chooser for the camera the 3D view uses
 - [ ] Cameras excluded from the legend, rule checker, Tab cycling, and exports (unless asked for)
 
@@ -460,16 +460,18 @@ A third view — **Design | Art preview | 3D view** — showing the backyard in 
 - [ ] Material-level default heights (e.g. deck 1.5 ft, pad 0.33 ft, ground surfaces 0) so most objects need nothing written
 - [ ] Use `fence_line`'s existing `height` / `post_spacing` / `post_size` / `rail_count`
 - [ ] Properties panel **Height** row (and base), editable like Size
-- [ ] Confirm the backyard's heights with Rich (fence heights already an open item; deck, hot tub, firepit, water features)
+- [ ] Backyard heights: hot tub 3 ft on its pad (**confirmed**); deck multi-level — north 1.5 ft, middle 1 ft, forward 6 in (**decided**; tier-to-object mapping to confirm); fences, firepit, water features still to confirm
 - [ ] `sits_on:` relation so stacked things (tub on pad, planters on deck) follow what they rest on
 - [ ] Flat ground at z = 0 for now; real grade stays an open question
 
 **Rendering**
-- [ ] Choose the renderer technology (recommended: small in-house numpy + cairo renderer — no new dependencies, deterministic, testable)
+- [ ] Renderer: **PyVista/VTK** recommended (Rich asked to leverage an existing engine; prototype renders the backyard in < 1 s with look-at camera, flat shading, outlines, sky) — pending OK on the ~520 MB dependency; fallback: small in-house renderer
 - [ ] Extrude each resolved 2D shape from base to base + height (holes carried through); flat objects as ground polygons in paint order
 - [ ] Fences as posts and rails; tree crowns as trunk + crown (not extrusions)
 - [ ] Perspective projection with correct hiding (nearer objects in front), clipping behind the camera
-- [ ] First style: flat-shaded material colors with simple sun lighting and silhouette/crease outlines
+- [ ] First style: flat-shaded material colors with simple sun lighting and silhouette/crease outlines (**decided**: flat-shaded first)
+- [ ] **Background: a surrounding 6 ft vinyl fence with sky above** (decided — Rich); on the page boundary until the real yard boundary is known, then real `fence_line` objects
+- [ ] Ground layers stacked properly (the prototype hid the sand circle under the patio)
 - [ ] Pavers as a surface texture (joints), not ~6,000 bricks of geometry
 - [ ] Later style: watercolor-and-pencil perspective (washes from color regions, pencil from depth/normal edges), reusing the art renderer
 
