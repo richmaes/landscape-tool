@@ -63,6 +63,11 @@ def build_parser() -> argparse.ArgumentParser:
         "also recorded in the file so it prints at that size",
     )
 
+    export = subparsers.add_parser(
+        "export", help="Render every output listed in an export recipe (see landscape/export_recipe.py)"
+    )
+    export.add_argument("recipe", help="Path to an export recipe YAML file")
+
     edit = subparsers.add_parser("edit", help="Open a scene in the graphical editor (M8)")
     edit.add_argument("scene", help="Path to a scene YAML file")
     edit.add_argument(
@@ -111,6 +116,16 @@ def main(argv: list[str] | None = None) -> int:
             kwargs["dpi"] = args.dpi
         renderer(doc, scene, materials, out_path, **kwargs)
         print(f"landscape render: wrote {out_path}")
+
+    elif args.command == "export":
+        from .export_recipe import RecipeError, load_recipe, run_recipe
+
+        try:
+            recipe = load_recipe(args.recipe)
+        except RecipeError as exc:
+            parser.exit(1, f"landscape export: {exc}\n")
+        for path in run_recipe(recipe):
+            print(f"landscape export: wrote {path}")
 
     elif args.command == "edit":
         from PySide6.QtWidgets import QApplication

@@ -1,0 +1,18 @@
+# Export recipe for the backyard design: every deliverable in one run.
+#   landscape export exports/backyard.yaml
+# Paths are relative to this file. Outputs land in out/ (git-ignored).
+
+scene: ../scenes/backyard.yaml
+materials: ../assets/materials.yaml
+
+defaults:
+  legend: true
+  scale_bar: true
+  north_arrow: true
+
+outputs:
+  - out: ../out/backyard-plan.pdf        # print-scale plan, 1/2 in = 1 ft
+  - out: ../out/backyard-plan.png        # for sharing on screen
+    dpi: 150
+  - out: ../out/backyard-technical.svg   # with the dashed annotations
+    annotations: true
