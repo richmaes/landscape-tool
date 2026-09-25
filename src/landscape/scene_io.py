@@ -16,6 +16,7 @@ from typing import Any
 from ruamel.yaml import YAML
 
 from .schema import (
+    Camera,
     Definition,
     Placement,
     Solid,
@@ -102,12 +103,46 @@ def parse_scene(raw: Any) -> SceneDocument:
             raise SchemaError(str(exc), path=path_hint, line=line_of(obj_data)) from exc
 
     doc.resolution_order = validate_and_order(doc)
+    doc.cameras = _parse_cameras(raw)
     doc.legend = _parse_placement(raw, "legend")
     doc.scale_indicator = _parse_placement(raw, "scale_indicator")
     return doc
 
 
 OVERLAY_KEYS = ("legend", "scale_indicator")
+CAMERA_FIELDS = ("x", "y", "z", "look_x", "look_y", "look_z", "fov")
+
+
+def validate_camera(camera: Camera) -> None:
+    """Raise ValueError if a camera can't produce a view."""
+    if not 10 <= camera.fov <= 150:
+        raise ValueError(f"camera '{camera.id}': fov must be between 10 and 150 degrees")
+    if (camera.x, camera.y, camera.z) == (camera.look_x, camera.look_y, camera.look_z):
+        raise ValueError(f"camera '{camera.id}': the look-at point can't be where the camera stands")
+
+
+def _parse_cameras(raw: Any) -> list[Camera]:
+    cameras: list[Camera] = []
+    for i, data in enumerate(raw.get("cameras") or []):
+        line = line_of(data)
+        try:
+            camera = Camera(
+                id=str(data["id"]),
+                **{key: float(data[key]) for key in CAMERA_FIELDS if key in data or key != "fov"},
+            )
+        except (TypeError, KeyError, ValueError) as exc:
+            raise SchemaError(
+                "each camera needs an id and numeric x, y, z, look_x, look_y, look_z (and optionally fov)",
+                path=f"cameras[{i}]", line=line,
+            ) from exc
+        if any(c.id == camera.id for c in cameras):
+            raise SchemaError(f"duplicate camera id '{camera.id}'", path=f"cameras[{i}]", line=line)
+        try:
+            validate_camera(camera)
+        except ValueError as exc:
+            raise SchemaError(str(exc), path=f"cameras[{i}]", line=line) from exc
+        cameras.append(camera)
+    return cameras
 
 
 def _parse_placement(raw: Any, key: str) -> Placement | None:

@@ -108,6 +108,16 @@ def _write_changed_fields(node: Any, data: dict[str, Any]) -> None:
         node[key] = value
 
 
+def _camera_node(camera) -> CommentedMap:
+    from .dimensions import _num
+    from .scene_io import CAMERA_FIELDS
+
+    node = CommentedMap(id=camera.id)
+    for key in CAMERA_FIELDS:
+        node[key] = _num(getattr(camera, key))
+    return node
+
+
 def _flow_seq(items: list) -> CommentedSeq:
     seq = CommentedSeq(items)
     seq.fa.set_flow_style()
@@ -243,6 +253,65 @@ class EditorSession:
             _set_keeping_trailing_gap(
                 raw_obj, "transform", CommentedMap(tx=t.tx, ty=t.ty, rotation=t.rotation, scale=t.scale)
             )
+
+    # --- 3D cameras (M11) --------------------------------------------------------
+
+    def add_camera(self) -> str:
+        """A new camera standing just inside the south edge of the page at
+        eye height, looking at the page centre. Undoable; returns its id."""
+        from .schema import Camera
+
+        n = 1
+        while any(c.id == f"view_{n}" for c in self.doc.cameras):
+            n += 1
+        doc = self.doc
+        camera = Camera(
+            id=f"view_{n}", x=doc.page_width / 2, y=min(1.5, doc.page_height / 4), z=5.5,
+            look_x=doc.page_width / 2, look_y=doc.page_height / 2, look_z=1.5, fov=60.0,
+        )
+        self.push_undo()
+        self.doc.cameras.append(camera)
+        raw_cameras = self.raw.get("cameras")
+        if raw_cameras is None:
+            raw_cameras = self.raw["cameras"] = CommentedSeq()
+        raw_cameras.append(_camera_node(camera))
+        self.recompute()
+        self.autosave()
+        return camera.id
+
+    def set_camera(self, camera_id: str, **values: float) -> None:
+        """Change any of a camera's `x`, `y`, `z`, `look_x`, `look_y`,
+        `look_z`, `fov`. Undoable; only the changed values are rewritten.
+        Raises ValueError for an unknown camera or an impossible view."""
+        from dataclasses import replace
+
+        from .scene_io import CAMERA_FIELDS, validate_camera
+
+        index = next((i for i, c in enumerate(self.doc.cameras) if c.id == camera_id), None)
+        if index is None:
+            raise ValueError(f"no camera '{camera_id}'")
+        unknown = set(values) - set(CAMERA_FIELDS)
+        if unknown:
+            raise ValueError(f"unknown camera fields: {', '.join(sorted(unknown))}")
+        updated = replace(self.doc.cameras[index], **{k: float(v) for k, v in values.items()})
+        validate_camera(updated)
+        self.push_undo()
+        self.doc.cameras[index] = updated
+        _write_changed_fields(self.raw["cameras"][index], _camera_node(updated))
+        self.recompute()
+        self.autosave()
+
+    def delete_camera(self, camera_id: str) -> None:
+        index = next((i for i, c in enumerate(self.doc.cameras) if c.id == camera_id), None)
+        if index is None:
+            raise ValueError(f"no camera '{camera_id}'")
+        self.push_undo()
+        del self.doc.cameras[index]
+        del self.raw["cameras"][index]
+        if not self.raw["cameras"]:
+            del self.raw["cameras"]
+        self.recompute()
+        self.autosave()
 
     def set_overlay_position(self, name: str, x: float, y: float) -> None:
         """Move the legend box or scale indicator (`name` is `legend` or

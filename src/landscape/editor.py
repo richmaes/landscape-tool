@@ -50,12 +50,14 @@ from PySide6.QtWidgets import (
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QPushButton,
     QSpinBox,
     QSplitter,
+    QVBoxLayout,
     QWidget,
 )
 from shapely.geometry.base import BaseGeometry
@@ -734,6 +736,177 @@ def add_overlay_items(
     _overlay_text(indicator, bar.label, bar.text_size, bar.label_x, h - bar.label_baseline_y)
     gscene.addItem(indicator)
     return {"legend": box, "scale_indicator": indicator}
+
+
+class CameraMarker(QGraphicsPathItem):
+    """One end of a 3D camera on the design canvas: the eye (where the
+    viewer stands) or the look-at point. Dragged like the legend — its own
+    press/move/release, so a drag never also moves the selected object —
+    with the rig's line and view wedge following live; the new position is
+    committed on release."""
+
+    RADIUS = 0.35
+
+    def __init__(self, rig: "CameraRig", role: str, x: float, y: float):
+        path = QPainterPath()
+        qx, qy = x, rig.page_height - y
+        if role == "eye":
+            path.addEllipse(QPointF(qx, qy), self.RADIUS, self.RADIUS)
+            path.addEllipse(QPointF(qx, qy), self.RADIUS * 0.35, self.RADIUS * 0.35)
+        else:  # a crosshair: "look here"
+            r = self.RADIUS
+            path.addEllipse(QPointF(qx, qy), r * 0.6, r * 0.6)
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                path.moveTo(qx + dx * r * 0.6, qy + dy * r * 0.6)
+                path.lineTo(qx + dx * r * 1.3, qy + dy * r * 1.3)
+        super().__init__(path)
+        self.rig, self.role = rig, role
+        self._origin = QPointF(x, y)  # scene feet, +y north
+        self._press_scene_pos = QPointF()
+        self._press_item_pos = QPointF()
+        color = QColor(30, 120, 220) if role == "eye" else QColor(220, 110, 20)
+        self.setPen(QPen(color.darker(130), 0.06))
+        self.setBrush(QBrush(color if role == "eye" else Qt.NoBrush))
+        self.setZValue(6000)
+        self.setCursor(Qt.OpenHandCursor)
+        self.setToolTip(f"3D camera '{rig.camera.id}': drag to move the " + ("viewer" if role == "eye" else "point it looks at"))
+
+    def scene_point(self) -> QPointF:
+        """Current position in scene feet (+y north), mid-drag included."""
+        return QPointF(self._origin.x() + self.pos().x(), self._origin.y() - self.pos().y())
+
+    def boundingRect(self):
+        return self.path().boundingRect().adjusted(-0.2, -0.2, 0.2, 0.2)
+
+    def shape(self) -> QPainterPath:
+        grab = QPainterPath()
+        grab.addEllipse(self.path().boundingRect().center(), self.RADIUS * 1.4, self.RADIUS * 1.4)
+        return grab
+
+    def mousePressEvent(self, event) -> None:
+        self._press_scene_pos = event.scenePos()
+        self._press_item_pos = self.pos()
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:
+        self.setPos(self._press_item_pos + (event.scenePos() - self._press_scene_pos))
+        self.rig.update()
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:
+        event.accept()
+        if self.pos() != self._press_item_pos:
+            self.rig.commit(self.role)
+
+
+class CameraRig:
+    """A 3D camera drawn on the plan: the eye and look-at markers, a dashed
+    sight line between them, and a wedge showing the field of view."""
+
+    def __init__(self, gscene: QGraphicsScene, camera, page_height: float,
+                 on_moved: Callable[[str, dict], None] | None):
+        self.camera, self.page_height, self._on_moved = camera, page_height, on_moved
+        self.wedge = QGraphicsPathItem()
+        self.wedge.setBrush(QBrush(QColor(30, 120, 220, 40)))
+        self.wedge.setPen(QPen(QColor(30, 120, 220, 120), 0.04))
+        self.wedge.setZValue(5990)
+        self.wedge.setAcceptedMouseButtons(Qt.NoButton)
+        self.line = QGraphicsPathItem()
+        pen = QPen(QColor(30, 120, 220), 0.05)
+        pen.setStyle(Qt.DashLine)
+        self.line.setPen(pen)
+        self.line.setZValue(5995)
+        self.line.setAcceptedMouseButtons(Qt.NoButton)
+        self.eye = CameraMarker(self, "eye", camera.x, camera.y)
+        self.look = CameraMarker(self, "look", camera.look_x, camera.look_y)
+        for item in (self.wedge, self.line, self.eye, self.look):
+            gscene.addItem(item)
+        self.update()
+
+    def _qt(self, p: QPointF) -> QPointF:
+        return QPointF(p.x(), self.page_height - p.y())
+
+    def update(self) -> None:
+        eye, look = self.eye.scene_point(), self.look.scene_point()
+        line = QPainterPath(self._qt(eye))
+        line.lineTo(self._qt(look))
+        self.line.setPath(line)
+        dx, dy = look.x() - eye.x(), look.y() - eye.y()
+        reach = max(math.hypot(dx, dy), 1.0)
+        angle = math.atan2(dy, dx)
+        half = math.radians(self.camera.fov / 2)
+        edge = reach / math.cos(half)  # so the wedge reaches the look-at point along its centre line
+        wedge = QPainterPath(self._qt(eye))
+        for a in (angle - half, angle + half):
+            wedge.lineTo(self._qt(QPointF(eye.x() + edge * math.cos(a), eye.y() + edge * math.sin(a))))
+        wedge.closeSubpath()
+        self.wedge.setPath(wedge)
+
+    def commit(self, role: str) -> None:
+        p = (self.eye if role == "eye" else self.look).scene_point()
+        values = {"x": p.x(), "y": p.y()} if role == "eye" else {"look_x": p.x(), "look_y": p.y()}
+        if self._on_moved:
+            self._on_moved(self.camera.id, {k: round(v, 3) for k, v in values.items()})
+
+
+def add_camera_items(gscene: QGraphicsScene, doc: SceneDocument,
+                     on_moved: Callable[[str, dict], None] | None = None) -> dict[str, CameraRig]:
+    return {camera.id: CameraRig(gscene, camera, doc.page_height, on_moved) for camera in doc.cameras}
+
+
+class CameraPanel(QGroupBox):
+    """The right column's 3D camera section (M11): which camera the 3D view
+    uses, add/delete, and its values typed in. Separate from the properties
+    panel, which is disabled whenever no object is selected."""
+
+    FIELDS = (("x", "X"), ("y", "Y"), ("z", "Eye height"), ("look_x", "Look at X"),
+              ("look_y", "Look at Y"), ("look_z", "Look at height"), ("fov", "Field of view"))
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__("3D camera", parent)
+        self.camera_combo = QComboBox()
+        self.add_button = QPushButton("Add")
+        self.delete_button = QPushButton("Delete")
+        chooser = QHBoxLayout()
+        chooser.addWidget(self.camera_combo, 1)
+        chooser.addWidget(self.add_button)
+        chooser.addWidget(self.delete_button)
+        layout = QFormLayout(self)
+        layout.addRow(chooser)
+        self.spins: dict[str, QDoubleSpinBox] = {}
+        for key, label in self.FIELDS:
+            spin = QDoubleSpinBox()
+            spin.setRange(10, 150) if key == "fov" else spin.setRange(-1000, 1000)
+            spin.setDecimals(2)
+            spin.setKeyboardTracking(False)  # commit on Enter / focus out, not per keystroke
+            spin.setSuffix("°" if key == "fov" else " ft")
+            layout.addRow(label, spin)
+            self.spins[key] = spin
+        self.x_spin, self.y_spin, self.z_spin = self.spins["x"], self.spins["y"], self.spins["z"]
+        self.fov_spin = self.spins["fov"]
+        self.aim_label = QLabel("—")
+        self.aim_label.setToolTip("Heading (clockwise from plan-north) and tilt, from the look-at point")
+        layout.addRow("Aim", self.aim_label)
+
+    def show_cameras(self, cameras, active_id: str | None) -> None:
+        self.camera_combo.blockSignals(True)
+        self.camera_combo.clear()
+        for camera in cameras:
+            self.camera_combo.addItem(camera.id)
+        if active_id is not None:
+            self.camera_combo.setCurrentText(active_id)
+        self.camera_combo.blockSignals(False)
+        active = next((c for c in cameras if c.id == active_id), None)
+        for key, spin in self.spins.items():
+            spin.blockSignals(True)
+            spin.setValue(getattr(active, key) if active else 0.0)
+            spin.setEnabled(active is not None)
+            spin.blockSignals(False)
+        self.delete_button.setEnabled(active is not None)
+        self.aim_label.setText(f"heading {active.heading:.0f}°, tilt {active.tilt:.0f}°" if active else "—")
+
+    def fields_enabled(self) -> bool:
+        return self.x_spin.isEnabled()
 
 
 def build_graphics_scene(
@@ -1453,9 +1626,24 @@ class EditorWindow(QMainWindow):
         self._panel.apply_relation_button.clicked.connect(self._on_apply_relation)
         self._panel.clear_relation_button.clicked.connect(self._on_clear_relation)
 
+        self._camera_panel = CameraPanel()
+        self._camera_panel.add_button.clicked.connect(self._on_add_camera)
+        self._camera_panel.delete_button.clicked.connect(self._on_delete_camera)
+        self._camera_panel.camera_combo.currentTextChanged.connect(self._on_camera_chosen)
+        for key, spin in self._camera_panel.spins.items():
+            spin.valueChanged.connect(lambda v, key=key: self._on_camera_field(key, v))
+        self._active_camera_id: str | None = None
+        self._camera_rigs: dict = {}
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.addWidget(self._panel)
+        right_layout.addWidget(self._camera_panel)
+        right_layout.addStretch(1)
+
         splitter = QSplitter()
         splitter.addWidget(self._view)
-        splitter.addWidget(self._panel)
+        splitter.addWidget(right)
         splitter.setStretchFactor(0, 4)
         splitter.setStretchFactor(1, 1)
         self.setCentralWidget(splitter)
@@ -1751,6 +1939,11 @@ class EditorWindow(QMainWindow):
             add_violation_overlays(gscene, self.session.violations, doc.page_height)
         # kept by name: QGraphicsScene.items() leaves out hidden items, so
         # during the art preview they can't be found that way
+        cameras = self.session.doc.cameras
+        if self._active_camera_id not in {c.id for c in cameras}:
+            self._active_camera_id = cameras[0].id if cameras else None
+        self._camera_rigs = add_camera_items(gscene, doc, on_moved=self._on_camera_dragged)
+        self._camera_panel.show_cameras(cameras, self._active_camera_id)
         self._overlay_items = add_overlay_items(
             gscene, doc, self.session.resolved, self.session.materials, _line_width_for_zoom(zoom),
             hidden_layers=self._hidden_layers, on_moved=self.session.set_overlay_position,
@@ -1773,6 +1966,42 @@ class EditorWindow(QMainWindow):
             self.statusBar().showMessage("Art preview — read-only. Switch to Design (Ctrl+1) to edit.")
         self._undo_action.setEnabled(self.session.can_undo)
         self._redo_action.setEnabled(self.session.can_redo)
+
+    # --- 3D cameras (M11) -------------------------------------------------------
+
+    def _on_add_camera(self) -> None:
+        self._active_camera_id = self.session.add_camera()
+        self._rebuild_scene()
+
+    def _on_delete_camera(self) -> None:
+        if self._active_camera_id:
+            self.session.delete_camera(self._active_camera_id)
+            self._active_camera_id = None
+            self._rebuild_scene()
+
+    def _on_camera_chosen(self, camera_id: str) -> None:
+        if camera_id and camera_id != self._active_camera_id:
+            self._active_camera_id = camera_id
+            self._rebuild_scene()
+
+    def _on_camera_field(self, key: str, value: float) -> None:
+        if not self._active_camera_id:
+            return
+        try:
+            self.session.set_camera(self._active_camera_id, **{key: value})
+        except ValueError as exc:
+            self.statusBar().showMessage(f"Can't set camera: {exc}")
+        self._rebuild_scene()
+
+    def _on_camera_dragged(self, camera_id: str, values: dict) -> None:
+        """A camera marker was dropped: commit, then redraw once the mouse
+        event has returned (the marker is still handling it)."""
+        self._active_camera_id = camera_id
+        try:
+            self.session.set_camera(camera_id, **values)
+        except ValueError as exc:
+            self.statusBar().showMessage(f"Can't move camera: {exc}")
+        QTimer.singleShot(0, self._rebuild_scene)
 
     def _on_object_drag_end(self) -> None:
         """A move-drag has finished. The drag itself only updated the

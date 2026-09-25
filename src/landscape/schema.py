@@ -394,6 +394,38 @@ class Solid:
 
 
 @dataclass
+class Camera:
+    """A 3D view's viewpoint (M11): where the viewer stands (`x`, `y` in
+    scene feet, eye height `z`) and the point they look at — Rich's choice
+    over heading/tilt dials, since dragging a look-at point on the plan is
+    direct, and moving the camera keeps it aimed at the same thing. `fov`
+    is the horizontal field of view in degrees."""
+
+    id: str
+    x: float
+    y: float
+    z: float
+    look_x: float
+    look_y: float
+    look_z: float
+    fov: float = 60.0
+
+    @property
+    def heading(self) -> float:
+        """Degrees clockwise from plan-north (+y), like the north arrow."""
+        import math
+
+        return math.degrees(math.atan2(self.look_x - self.x, self.look_y - self.y)) % 360
+
+    @property
+    def tilt(self) -> float:
+        """Degrees above (+) or below (-) level."""
+        import math
+
+        return math.degrees(math.atan2(self.look_z - self.z, math.hypot(self.look_x - self.x, self.look_y - self.y)))
+
+
+@dataclass
 class Placement:
     """Where a drawing overlay (the legend box, the scale indicator) sits,
     in scene units: its origin point, which the designer drags."""
@@ -421,6 +453,7 @@ class SceneDocument:
     # round-trips byte-identical).
     legend: Placement | None = None
     scale_indicator: Placement | None = None
+    cameras: list[Camera] = field(default_factory=list)  # 3D viewpoints (M11); written only once one exists
     """Object ids in dependency order (relations + boolean ops resolved
     before anything that references them). Populated by `scene_io` during
     validation; M3 walks it to resolve geometry."""
