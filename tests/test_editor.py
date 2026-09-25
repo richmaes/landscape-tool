@@ -2337,3 +2337,55 @@ def test_art_preview_says_it_is_read_only(qtbot, art_calls):
     window = _open_editor(qtbot)
     window._art_action.trigger()
     assert "Art preview" in window.statusBar().currentMessage()
+
+
+# --- Size readout in the properties panel ------------------------------------------
+
+
+def test_dimensions_text_describes_rects_circles_and_lines():
+    from shapely import affinity
+    from shapely.geometry import LineString, Point
+
+    from landscape.editor import dimensions_text
+
+    shed = affinity.rotate(box(0, 0, 6, 4), 5)  # rotation must not inflate the size
+    assert dimensions_text(shed) == "6.00 × 4.00 ft"
+    assert dimensions_text(Point(0, 0).buffer(1.0, 64)) == "⌀ 2.00 ft"
+    assert dimensions_text(LineString([(0, 0), (3, 4)])) == "5.00 ft long"
+    assert dimensions_text(box(0, 0, 6, 4), factor=1.5) == "9.00 × 6.00 ft"
+
+
+def test_selecting_an_object_shows_its_size(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")  # a 6 x 4 ft rect, rotated 5 degrees
+    assert window._panel.size_label.text() == "6.00 × 4.00 ft"
+
+
+def test_size_follows_a_scale_edit(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    window._panel.scale_spin.setValue(1.5)
+    assert window._panel.size_label.text() == "9.00 × 6.00 ft"
+
+
+def test_size_updates_live_while_dragging_the_resize_handle(qtbot):
+    """Before the gesture commits — Rich wants to watch the size change as
+    he drags."""
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    resize_handle = next(h for h in window._selection_handles if h.kind == "resize")
+
+    resize_handle.setPos(_pos_at_distance_factor(resize_handle, 2.0))  # mid-gesture, not released
+
+    preview_scale = resize_handle._final_value
+    assert preview_scale != pytest.approx(1.0)
+    assert window._panel.size_label.text() == f"{6 * preview_scale:.2f} × {4 * preview_scale:.2f} ft"
+    resize_handle.end_drag()
+    assert window._panel.size_label.text() == f"{6 * preview_scale:.2f} × {4 * preview_scale:.2f} ft"
+
+
+def test_size_clears_when_nothing_is_selected(qtbot):
+    window = _open_editor(qtbot)
+    _select_only(window, "shed")
+    window._view.scene().clearSelection()
+    assert window._panel.size_label.text() == "—"

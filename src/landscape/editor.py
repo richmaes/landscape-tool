@@ -267,6 +267,34 @@ class EditableItem(QGraphicsPathItem):
                 self._on_drag_end()
 
 
+def dimensions_text(geom: BaseGeometry, factor: float = 1.0, units: str = "ft") -> str:
+    """A selected object's real size, for the properties panel: its tightest
+    (rotated) bounding rectangle, so a turned 6 x 4 shed still reads
+    6.00 x 4.00 rather than the larger axis-aligned box around it. Circles
+    read as a diameter, plain lines as a length. `factor` scales the result
+    — the live preview while a resize handle is being dragged."""
+    if geom.is_empty:
+        return "—"
+    if geom.geom_type in ("LineString", "MultiLineString"):
+        return f"{geom.length * factor:.2f} {units} long"
+    # Shapely's own envelope maths divides by zero on perfectly vertical or
+    # horizontal edges and then handles it; the result is right, only the
+    # numpy warning is noise.
+    import numpy as np
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rect = geom.minimum_rotated_rectangle
+    xs, ys = rect.exterior.coords.xy
+    sides = sorted(
+        (math.hypot(xs[i + 1] - xs[i], ys[i + 1] - ys[i]) for i in range(2)), reverse=True
+    )
+    long_side, short_side = sides[0] * factor, sides[1] * factor
+    area = geom.area * factor * factor
+    if long_side and abs(long_side - short_side) / long_side < 0.01 and abs(area - math.pi * long_side**2 / 4) / area < 0.02:
+        return f"⌀ {long_side:.2f} {units}"
+    return f"{long_side:.2f} × {short_side:.2f} {units}"
+
+
 class SelectionHandle(QGraphicsEllipseItem):
     """A small draggable handle for resizing (uniform scale about the
     target's centroid — `Transform.scale` is a single uniform factor,
@@ -322,12 +350,17 @@ class SelectionHandle(QGraphicsEllipseItem):
         target: EditableItem,
         view: "SceneGraphicsView",
         on_drag_end: Callable[[float], None] | None,
+        on_preview: Callable[[float], None] | None = None,
     ):
         super().__init__(-self.RADIUS, -self.RADIUS, self.RADIUS * 2, self.RADIUS * 2)
         self.kind = kind
         self.target = target
         self.view = view
         self._on_drag_end = on_drag_end
+        # Called on every step of a resize gesture with the scale factor so
+        # far relative to the gesture's start — for live readouts (the
+        # panel's Size row), before anything is committed.
+        self._on_preview = on_preview
         color = QColor(30, 120, 220) if kind == "resize" else QColor(220, 140, 20)
         self.setBrush(QBrush(color))
         self.setPen(QPen(color.darker(150), 0.04))
@@ -420,6 +453,8 @@ class SelectionHandle(QGraphicsEllipseItem):
                 )
                 self._final_value = max(0.01, clamped)
                 self.target.setScale(self._final_value / self._start_scale)
+                if self._on_preview:
+                    self._on_preview(self._final_value / self._start_scale)
             else:
                 delta_angle = self._angle(value) - self._start_angle
                 # `delta_angle` is measured in Qt's y-down coordinates
@@ -811,6 +846,8 @@ class PropertiesPanel(QWidget):
     def __init__(self, materials: MaterialLibrary, parent: QWidget | None = None):
         super().__init__(parent)
         self.id_label = QLabel("—")
+        self.size_label = QLabel("—")
+        self.size_label.setToolTip("Actual size after scaling (updates live while resizing)")
         self.rotation_spin = QDoubleSpinBox()
         self.rotation_spin.setRange(-3600, 3600)
         self.rotation_spin.setSuffix("°")
@@ -844,6 +881,7 @@ class PropertiesPanel(QWidget):
 
         layout = QFormLayout(self)
         layout.addRow("Object", self.id_label)
+        layout.addRow("Size", self.size_label)
         layout.addRow("Rotation", self.rotation_spin)
         layout.addRow("Scale", self.scale_spin)
         layout.addRow("Material", self.material_combo)
@@ -924,6 +962,7 @@ class PropertiesPanel(QWidget):
 
     def clear(self) -> None:
         self.id_label.setText("—")
+        self.size_label.setText("—")
         self.setEnabled(False)
 
 
@@ -1505,6 +1544,7 @@ class EditorWindow(QMainWindow):
             self._selected_id = items[0].scene_object.id
             all_ids = [o.id for o in self.session.doc.objects]
             self._panel.show_object(items[0].scene_object, all_ids)
+            self._show_selected_size()
             self._update_selection_handles(items[0])
         else:
             self._selected_id = None
@@ -1529,7 +1569,9 @@ class EditorWindow(QMainWindow):
         if target is None:
             return
 
-        resize_handle = SelectionHandle("resize", target, self._view, self._on_handle_resized)
+        resize_handle = SelectionHandle(
+            "resize", target, self._view, self._on_handle_resized, on_preview=self._show_selected_size
+        )
         rotate_handle = SelectionHandle("rotate", target, self._view, self._on_handle_rotated)
         scene = self._view.scene()
         scene.addItem(resize_handle)
@@ -1573,11 +1615,20 @@ class EditorWindow(QMainWindow):
         target.centroid = QPointF(c.x, page_height - c.y)
         self._place_selection_handles(target)
 
+    def _show_selected_size(self, factor: float = 1.0) -> None:
+        """The selected object's size from its committed geometry, times
+        `factor` — 1.0 normally, the in-progress ratio during a resize drag."""
+        if not self._selected_id:
+            return
+        geom = self.session.resolved.get(self._selected_id).geometry
+        self._panel.size_label.setText(dimensions_text(geom, factor, self.session.doc.units))
+
     def _on_handle_resized(self, value: float) -> None:
         if not self._selected_id:
             return
         self.session.set_scale(self._selected_id, value)
         self._settle_handle_gesture()
+        self._show_selected_size()
         self._panel.scale_spin.blockSignals(True)
         self._panel.scale_spin.setValue(value)
         self._panel.scale_spin.blockSignals(False)
