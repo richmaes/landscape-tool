@@ -3,11 +3,13 @@
 # This is the M1 task "Convert objects.json into the first real scene
 # YAML once M2 lands."
 #
-# Faithfully reproduces the actual extracted geometry AND its known,
-# still-unresolved design flaws (see extraction/objects.md "Geometric
-# findings") rather than a corrected version — rules/backyard.yaml is
-# built to flag exactly those flaws automatically, as a real test of the
-# M3b rule checker against real data, not a synthetic fixture.
+# This is the live, editable design. It started as a faithful copy of the
+# extracted geometry AND its known design flaws (see extraction/objects.md
+# "Geometric findings"); that original is frozen, for the tests that check
+# rules/backyard.yaml flags exactly those flaws, as
+# tests/fixtures/backyard_original.yaml. Design changes since (e.g. the
+# firepit keep-out recentred and shrunk, 2026-09-24) are recorded in
+# TODO.md's Decision record.
 #
 # Materials left unassigned (rendering as the fallback color) are ones
 # extraction/objects.json's own "materials_identified" section marks

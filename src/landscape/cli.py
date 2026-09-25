@@ -47,6 +47,14 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument(
         "--show-annotations", action="store_true", help="Draw annotation objects (technical view)"
     )
+    render.add_argument("--scale-bar", action="store_true", help="Add a scale bar in a strip below the drawing")
+    render.add_argument("--north-arrow", action="store_true", help="Add a north arrow in a strip below the drawing")
+    render.add_argument(
+        "--north-angle",
+        type=float,
+        default=0.0,
+        help="Degrees clockwise from page-up that north lies at (default 0: page-up is north)",
+    )
     render.add_argument(
         "--dpi",
         type=float,
@@ -92,7 +100,13 @@ def main(argv: list[str] | None = None) -> int:
         materials = load_materials(args.materials)
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
-        kwargs = {"show_legend": args.legend, "show_annotations": args.show_annotations}
+        kwargs = {
+            "show_legend": args.legend,
+            "show_annotations": args.show_annotations,
+            "scale_bar": args.scale_bar,
+            "north_arrow": args.north_arrow,
+            "north_deg": args.north_angle,
+        }
         if renderer is render_scene_to_png:
             kwargs["dpi"] = args.dpi
         renderer(doc, scene, materials, out_path, **kwargs)

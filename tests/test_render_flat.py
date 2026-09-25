@@ -243,3 +243,109 @@ def test_used_materials_excludes_annotations_keepouts_and_fallback():
     )
     used = used_materials_in_scene(scene, _tiny_library())
     assert [m.id for m in used] == ["blue", "red"]  # sorted by name
+
+
+# --- M7: scale bar and north arrow ----------------------------------------------
+
+
+BACKYARD_ORIGINAL = Path(__file__).parent / "fixtures" / "backyard_original.yaml"
+
+
+def _backyard():
+    doc = load_scene(BACKYARD_ORIGINAL)
+    return doc, resolve_scene(doc), load_materials(DEFAULT_MATERIALS)
+
+
+def test_nice_scale_bar_length_is_a_round_number_near_a_quarter_of_the_width():
+    from landscape.render_flat import nice_scale_bar_length
+
+    assert nice_scale_bar_length(24) == 5
+    assert nice_scale_bar_length(40) == 10
+    assert nice_scale_bar_length(100) == 25
+    assert nice_scale_bar_length(3) == 0.5
+
+
+def test_print_scale_label_states_the_real_ratio():
+    """36 pt per ft at 72 pt per inch is 1/2 in = 1 ft, i.e. 1:24."""
+    from landscape.render_flat import print_scale_label
+
+    assert print_scale_label(36, "ft") == '1/2 in = 1 ft (1:24)'
+    assert print_scale_label(18, "ft") == '1/4 in = 1 ft (1:48)'
+    assert print_scale_label(72, "ft") == '1 in = 1 ft (1:12)'
+
+
+def test_decorations_add_a_strip_below_the_drawing_not_over_it(tmp_path):
+    """The drawing fills its page edge to edge, so the scale bar and north
+    arrow go in a strip *below* it: the page grows taller, its width and
+    the drawing itself (still at exact print scale) are unchanged."""
+    import pdfplumber
+
+    from landscape.render_flat import DECORATION_STRIP_PT
+
+    doc, scene, materials = _backyard()
+    plain, decorated = tmp_path / "plain.pdf", tmp_path / "decorated.pdf"
+    render_scene_to_pdf(doc, scene, materials, plain)
+    render_scene_to_pdf(doc, scene, materials, decorated, scale_bar=True, north_arrow=True)
+
+    with pdfplumber.open(plain) as p, pdfplumber.open(decorated) as d:
+        assert (p.pages[0].width, p.pages[0].height) == (864, 864)
+        assert (d.pages[0].width, d.pages[0].height) == (864, 864 + DECORATION_STRIP_PT)
+
+
+def test_pdf_scale_bar_and_north_arrow_carry_their_labels(tmp_path):
+    import pdfplumber
+
+    doc, scene, materials = _backyard()
+    out = tmp_path / "plan.pdf"
+    render_scene_to_pdf(doc, scene, materials, out, scale_bar=True, north_arrow=True)
+
+    with pdfplumber.open(out) as pdf:
+        text = pdf.pages[0].extract_text()
+    assert "5 ft" in text
+    assert "1:24" in text
+    assert "N" in text.split()
+
+
+def test_scale_bar_is_physically_the_length_it_claims(tmp_path):
+    """At 72 DPI one pixel is one point, and the backyard is 36 pt per ft,
+    so the 5 ft bar must span 180 px — the whole point of a scale bar."""
+    from landscape.render_flat import DECORATION_STRIP_PT, scale_bar_geometry
+
+    doc, scene, materials = _backyard()
+    out = tmp_path / "plan.png"
+    render_scene_to_png(doc, scene, materials, out, dpi=72, scale_bar=True)
+
+    x0, y, length = scale_bar_geometry(doc)  # scene units (ft), y measured down from the drawing's top
+    row = round(y * doc.scale + 1)  # just inside the bar's filled segments
+    with Image.open(out) as img:
+        assert img.size[1] == 864 + DECORATION_STRIP_PT
+        dark = [x for x in range(img.size[0]) if sum(img.getpixel((x, row))[:3]) < 200]
+    assert length == 5
+    assert min(dark) == pytest.approx(x0 * doc.scale, abs=2)
+    assert max(dark) - min(dark) == pytest.approx(length * doc.scale, abs=2)
+
+
+def test_north_arrow_points_page_up_by_default_and_rotates_with_north_angle():
+    """Whether page-up really is north is still an open question (see
+    extraction/objects.md), so the angle is a parameter: degrees clockwise
+    from page-up."""
+    from landscape.render_flat import north_arrow_tip
+
+    cx, cy, size = 10.0, 10.0, 1.0  # cairo page coords: +y is *down*
+    assert north_arrow_tip(cx, cy, size, 0) == pytest.approx((10.0, 9.0))
+    assert north_arrow_tip(cx, cy, size, 90) == pytest.approx((11.0, 10.0))  # north is page-right
+
+
+
+def test_the_drawing_never_spills_into_the_strip(tmp_path):
+    """The original design's keep-out overhangs the page bottom by ~1 ft,
+    and the site circle's outline touches it; with a strip below, both
+    used to draw straight across the scale bar area."""
+    doc, scene, materials = _backyard()
+    out = tmp_path / "plan.png"
+    render_scene_to_png(doc, scene, materials, out, dpi=72, north_arrow=True)  # no scale bar: strip is empty on the left
+
+    with Image.open(out) as img:
+        strip_row = 864 + 10  # 10 pt below the drawing's edge
+        left_half = [img.getpixel((x, strip_row))[:3] for x in range(img.size[0] // 2)]
+    assert all(pixel == (255, 255, 255) for pixel in left_half)

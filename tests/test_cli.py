@@ -97,3 +97,22 @@ def test_render_png_at_a_given_dpi(tmp_path):
     with Image.open(out) as img:
         assert round(img.info["dpi"][0]) == 150
         assert img.size[0] == round(40 * 36 / 72 * 150)  # example.yaml: 40 ft at 36 pt/ft
+
+
+def test_render_pdf_with_scale_bar_and_north_arrow(tmp_path):
+    import pdfplumber
+
+    from landscape.render_flat import DECORATION_STRIP_PT
+
+    out = tmp_path / "plan.pdf"
+    exit_code = main(
+        [
+            "render", str(EXAMPLE_SCENE), "--out", str(out), "--materials", str(DEFAULT_MATERIALS),
+            "--scale-bar", "--north-arrow", "--north-angle", "15",
+        ]
+    )
+    assert exit_code == 0
+    with pdfplumber.open(out) as pdf:
+        page = pdf.pages[0]
+        assert page.height == 40 * 36 + DECORATION_STRIP_PT  # example.yaml: 40 ft at 36 pt/ft
+        assert "1:24" in page.extract_text()
