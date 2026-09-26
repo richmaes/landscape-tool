@@ -26,3 +26,13 @@ its declared size in its place.
 
 **Somewhere else:** set the `LANDSCAPE_MODELS` environment variable to use a
 different folder.
+
+**A simple hot tub, generated:** `.venv/bin/python tools/make_hot_tub_model.py`
+writes `Simple Hot Tub/simple_hot_tub.obj` here (7 x 7 x 3 ft, wooden plank
+exterior, off-white interior). The script is committed, so it can be
+regenerated on any machine.
+
+**OBJ textures not showing?** VTK's OBJ importer ignores *all* texture
+coordinates in a file if any face lacks them (a face line like `f 1 2 3`
+instead of `f 1/1 2/2 3/3`). Re-exporting with UVs on every face — or as
+glTF/GLB — fixes it.

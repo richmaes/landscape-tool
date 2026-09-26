@@ -244,3 +244,61 @@ def test_create_model_from_the_menu(qtbot, tmp_path, monkeypatch):
 
     assert [o.primitive.file for o in window.session.doc.objects] == ["bench.obj"]
     assert window._selected_id == window.session.doc.objects[0].id
+
+
+def test_an_obj_models_textures_are_used_and_tile(tmp_path):
+    """A real bug: the generated hot tub's plank texture came out plain
+    brown. Its long sides tile the texture (coordinates beyond 0..1), which
+    VTK clamps to the edge colour unless the texture is set to repeat —
+    common in real model files too. The loader now turns repeat on."""
+    from PIL import Image
+
+    from landscape.render3d import render_3d_image
+    from landscape.schema import Camera
+
+    models = tmp_path / "models"
+    models.mkdir()
+    stripes = np.zeros((64, 64, 3), np.uint8)
+    stripes[:, ::8] = 255  # white stripes on black
+    Image.fromarray(stripes).save(models / "stripes.png")
+    (models / "wall.mtl").write_text("newmtl striped\nKd 1 1 1\nmap_Kd stripes.png\n")
+    (models / "wall.obj").write_text(
+        "mtllib wall.mtl\n"
+        "v -1 0 0\nv 1 0 0\nv 1 2 0\nv -1 2 0\n"  # a 2 x 2 wall standing up (Y-up), facing +z
+        "vt 0 0\nvt 4 0\nvt 4 1\nvt 0 1\n"  # the stripes tile four times across
+        "usemtl striped\nf 1/1 2/2 3/3 4/4\n"
+    )
+    doc = load_scene(_scene(tmp_path, file="wall.obj", size="width: 6\n    depth: 0.1\n    height: 6"))
+    camera = Camera("c", x=10, y=1, z=3, look_x=10, look_y=10, look_z=3, fov=40)
+    img = np.asarray(render_3d_image(doc, resolve_scene(doc), load_materials(MATERIALS), camera, 300, 200,
+                                     surround=False, models_dir=models), float).mean(axis=2)
+    band = img[80:120, 150:260]  # the right-hand part of the wall: texture coordinates past 1
+    assert band.max() - band.min() > 80  # still stripes, not the clamped edge colour
+
+
+def test_the_generated_hot_tub_loads_with_its_wood_texture(tmp_path):
+    """tools/make_hot_tub_model.py: a 7 x 7 x 3 ft tub, wood outside
+    (textured), off-white inside. Every face must carry texture
+    coordinates — VTK's OBJ importer drops them for the whole file if any
+    face lacks them, which once left the planks plain brown."""
+    import importlib.util
+
+    import pyvista as pv
+
+    from landscape.models import model_proportions
+    from landscape.render3d import _import_model
+
+    spec = importlib.util.spec_from_file_location("make_hot_tub_model", REPO / "tools" / "make_hot_tub_model.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    obj = module.make_hot_tub(tmp_path / "tub")
+
+    assert model_proportions(obj, across=7) == pytest.approx((7, 7, 3), abs=0.01)
+    plotter = pv.Plotter(off_screen=True)
+    try:
+        actors = _import_model(plotter, obj)
+        textured = [a for a in actors if a.GetTexture() is not None]
+        assert textured, "the wood exterior should carry its plank texture"
+        assert all(a.GetMapper().GetInput().GetPointData().GetTCoords() is not None for a in textured)
+    finally:
+        plotter.close()
