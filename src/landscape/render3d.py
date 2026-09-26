@@ -20,12 +20,13 @@ import math
 import numpy as np
 import shapely
 from PIL import Image
-from shapely.geometry import Polygon
+from shapely.geometry import LineString, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from .geometry import ResolvedScene
 from .materials import MaterialLibrary
 from .schema import Camera, SceneDocument
+from .fences import fence_centerline, fence_spec
 from .solids import effective_solid
 
 SKY_TOP = "#8FB9E0"
@@ -76,6 +77,56 @@ def _surround(doc: SceneDocument):
         (0, -t, w, 0), (w, -t, w + t, h + t), (0, h, w, h + t), (-t, -t, 0, h + t),
     ]
     return [_prism(shapely.box(*s), 0.0, SURROUND_HEIGHT) for s in sides]
+
+
+_PANEL_THICKNESS = 0.1  # ft: slats/boards
+_POST_CAP = 0.25  # ft: how far posts stand above the panel
+
+
+def _add_fence(plotter, line: LineString, spec, color: str, base: float, height: float) -> None:
+    """A fence along `line`: a slatted (vinyl) or boarded (cedar) panel
+    with its boards as a tiled texture, and square posts every
+    `spec.post_spacing`, standing a little above the panel."""
+    import pyvista as pv
+
+    from .fences import board_texture, fence_posts
+
+    (x0, y0), (x1, y1) = line.coords[0], line.coords[-1]
+    length = line.length
+    if length <= 0:
+        return
+    dx, dy = (x1 - x0) / length, (y1 - y0) / length
+    nx, ny = -dy * _PANEL_THICKNESS / 2, dx * _PANEL_THICKNESS / 2
+    top = base + height
+    repeat = length / (4 * (spec.slat_width + spec.gap))  # the texture holds 4 boards
+    points, faces, uvs = [], [], []
+
+    def quad(corners, uv):
+        start = len(points)
+        points.extend(corners)
+        uvs.extend(uv)
+        faces.append([4, start, start + 1, start + 2, start + 3])
+
+    for side in (1, -1):  # both faces of the panel, boards on each
+        ox, oy = nx * side, ny * side
+        a, b = (x0 + ox, y0 + oy), (x1 + ox, y1 + oy)
+        quad([(*a, base), (*b, base), (*b, top), (*a, top)], [(0, 0), (repeat, 0), (repeat, 1), (0, 1)])
+    a0, a1 = (x0 + nx, y0 + ny), (x0 - nx, y0 - ny)
+    b0, b1 = (x1 + nx, y1 + ny), (x1 - nx, y1 - ny)
+    quad([(*a0, top), (*b0, top), (*b1, top), (*a1, top)], [(0, 1)] * 4)  # the top edge
+    panel = pv.PolyData(np.asarray(points, float), faces=np.hstack(faces))
+    panel.active_texture_coordinates = np.asarray(uvs, float)
+    texture = pv.Texture(board_texture(spec, color))
+    texture.repeat = True
+    plotter.add_mesh(panel, texture=texture, ambient=0.55, diffuse=0.45, smooth_shading=False)
+
+    post_color = "#" + "".join(f"{int(int(color[i:i + 2], 16) * (0.94 if spec.boards == 'vinyl' else 0.75)):02X}"
+                               for i in (1, 3, 5))
+    for post in fence_posts(line, spec.post_spacing, spec.post_size):
+        pts, fcs = _prism(post, base, top + _POST_CAP)
+        mesh = pv.PolyData(pts, faces=fcs).clean()
+        plotter.add_mesh(mesh, color=post_color, ambient=0.55, diffuse=0.45, smooth_shading=False)
+        _add_outline(plotter, mesh, "#8A8780" if spec.boards == "vinyl" else OUTLINE, 1.0)
 
 
 def place_models(plotter, scene: ResolvedScene, materials: MaterialLibrary, models_dir=None) -> list[tuple]:
@@ -227,6 +278,10 @@ def render_3d_image(
             solid = effective_solid(obj, materials)
             material = materials.resolve(obj.material) if obj.material else None
             color = UNASSIGNED if material is None or material.id == "__fallback__" else material.color
+            spec = fence_spec(material, doc.units) if material is not None else None
+            if spec is not None and solid.height > 0:
+                _add_fence(plotter, fence_centerline(obj.geometry), spec, color, solid.base, solid.height)
+                continue
             base = solid.base + rank * _GROUND_STEP
             top = base + solid.height
             for poly in polys:
@@ -243,10 +298,18 @@ def render_3d_image(
         place_models(plotter, scene, materials, models_dir)
 
         if surround:
-            for points, faces in _surround(doc):
-                mesh = pv.PolyData(points, faces=faces).clean()
-                plotter.add_mesh(mesh, color=VINYL, **surface)
-                _add_outline(plotter, mesh, "#8A8780", 1.0)
+            vinyl = materials.materials.get("fence_vinyl")
+            spec = fence_spec(vinyl, doc.units) if vinyl is not None else None
+            if spec is not None:  # Rich's vinyl fence all round: slats and posts
+                w, h = doc.page_width, doc.page_height
+                corners = [(0, 0), (w, 0), (w, h), (0, h)]
+                for a, b in zip(corners, corners[1:] + corners[:1]):
+                    _add_fence(plotter, LineString([a, b]), spec, vinyl.color, 0.0, SURROUND_HEIGHT)
+            else:
+                for points, faces in _surround(doc):
+                    mesh = pv.PolyData(points, faces=faces).clean()
+                    plotter.add_mesh(mesh, color=VINYL, **surface)
+                    _add_outline(plotter, mesh, "#8A8780", 1.0)
 
         eye = (camera.x, camera.y, camera.z)
         look = (camera.look_x, camera.look_y, camera.look_z)

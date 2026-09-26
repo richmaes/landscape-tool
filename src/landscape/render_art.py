@@ -401,6 +401,22 @@ def _leaf_clumps(geom: BaseGeometry, rng: np.random.Generator) -> list[BaseGeome
     return arcs
 
 
+def _paint_fence_posts(canvas: _Canvas, obj: ResolvedObject, material: Material, crop, style: ArtStyle,
+                       units: str) -> None:
+    """A fence's posts (every 8 ft): a darker dab of its colour, outlined in pencil."""
+    from .fences import fence_centerline, fence_posts, fence_spec
+
+    spec = fence_spec(material, units)
+    if spec is None:
+        return
+    posts = fence_posts(fence_centerline(obj.geometry), spec.post_spacing, spec.post_size)
+    for post in posts:
+        canvas.multiply(crop, canvas.fill_mask(post, crop) * 0.7, np.clip(_rgb(material.color) * 0.55, 0, 1))
+    width = style.pencil_width_in * canvas.units_per_inch
+    canvas.multiply(crop, canvas.stroke_mask([p.exterior for p in posts], crop, width, 0.7 * style.pencil),
+                    _rgb(style.pencil_color))
+
+
 def _paint_pavers(canvas: _Canvas, obj: ResolvedObject, material: Material, crop, style: ArtStyle, rng,
                   units: str) -> None:
     """Over a paver material's wash: each brick a slightly different tone
@@ -555,6 +571,7 @@ def render_art_image(
             canvas.multiply(crop, wash(canvas, geom, crop, style, rng, clouds), _pigment(material))
             _texture(canvas, obj, material, crop, style, rng)
             _paint_pavers(canvas, obj, material, crop, style, rng, doc.units)
+            _paint_fence_posts(canvas, obj, material, crop, style, doc.units)
 
         # pencil outline: two slightly different passes, like a sketched line
         outline = geom.boundary if is_area else geom

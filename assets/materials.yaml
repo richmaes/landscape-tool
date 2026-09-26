@@ -94,11 +94,33 @@ materials:
     texture: {style: none}
     edge: {weight: 1.5, color: null}
 
+  # Fences (the `fence` family): a plain one, and two with a fence recipe —
+  # `style: fence` with the boards (vinyl or cedar), their width and gap in
+  # inches, and posts every `post_spacing` feet, `post_size_in` square.
+  # Posts show on the plan; in 3D the panel is slatted or boarded between
+  # taller posts (see src/landscape/fences.py).
   fence:
-    name: Fence
+    name: Fence (natural)
+    family: fence
     solid: {height: 6}
     color: "#E4DCC8"
     texture: {style: none}
+    edge: {weight: 1.0, color: null}
+
+  fence_vinyl:
+    name: Fence (white vinyl slats)
+    family: fence
+    solid: {height: 6}
+    color: "#F2F1EC"
+    texture: {style: fence, boards: vinyl, slat_width_in: 6, gap_in: 0.5, post_spacing: 8, post_size_in: 5}
+    edge: {weight: 1.0, color: "#B8B6AE"}
+
+  fence_cedar:
+    name: Fence (cedar)
+    family: fence
+    solid: {height: 6}
+    color: "#A5603A"
+    texture: {style: fence, boards: cedar, slat_width_in: 5.5, gap_in: 0.25, post_spacing: 8, post_size_in: 4}
     edge: {weight: 1.0, color: null}
 
   tree_canopy:

@@ -140,6 +140,7 @@ def render_flat(
             else:
                 ctx.new_path()
             _draw_paver_joints(ctx, obj, material, page_height, units)
+            _draw_fence_posts(ctx, obj, material, page_height, units)
         else:
             _draw_line_path(ctx, geom, page_height)
             ctx.set_source_rgb(*_rgb01(_edge_color(material)))
@@ -160,6 +161,20 @@ def _draw_paver_joints(ctx: cairo.Context, obj: ResolvedObject, material: Materi
     ctx.set_source_rgb(*_rgb01(_darken(material.color, 0.72)))
     ctx.set_line_width(spec.width * 0.06)  # joints about 1/4 in wide on a 4 in brick
     ctx.stroke()
+
+
+def _draw_fence_posts(ctx: cairo.Context, obj: ResolvedObject, material: Material, page_height: float, units: str) -> None:
+    """For a fence material with a recipe, its posts (every 8 ft) as small
+    darker squares along the fence (see fences.py)."""
+    from .fences import fence_centerline, fence_posts, fence_spec
+
+    spec = fence_spec(material, units)
+    if spec is None:
+        return
+    for post in fence_posts(fence_centerline(obj.geometry), spec.post_spacing, spec.post_size):
+        _draw_polygon_path(ctx, post, page_height)
+    ctx.set_source_rgb(*_rgb01(_darken(material.color, 0.55)))
+    ctx.fill()
 
 
 def _draw_annotation(ctx: cairo.Context, obj: ResolvedObject, page_height: float, label: str | None = None) -> None:

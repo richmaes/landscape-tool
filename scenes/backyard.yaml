@@ -60,7 +60,7 @@ objects:
   - id: existing_vinyl_fence
     type: fence_line
     points: [[6, 30], [30, 30]]
-    material: fence
+    material: fence_vinyl
     layer: structures
     z: 0
 

@@ -155,6 +155,7 @@ class EditableItem(QGraphicsPathItem):
         # inside its keepout). See `shape()`.
         self._outline_hit_width = outline_hit_width
         self.joints_item: QGraphicsPathItem | None = None  # paver joints, if the material is a paver
+        self.posts_item: QGraphicsPathItem | None = None  # fence posts, if the material is a fence with a recipe
         # Shapely's true centroid (in this item's Qt/y-flipped coordinates),
         # not the bounding-box center: `geometry._apply_transform` pivots
         # scale/rotation about `origin="centroid"`, and for any asymmetric
@@ -529,6 +530,14 @@ def _add_material_item(
     item.setPen(QPen(LINE_COLOR, line_width))
     if obj.model is not None:
         _style_model_footprint(item, obj, material, page_height, line_width, models_dir)
+    posts = _fence_posts_path(obj.geometry, material, page_height, units)
+    if posts is not None:
+        posts_item = QGraphicsPathItem(posts, item)
+        posts_item.setBrush(QBrush(QColor(material.color).darker(170)))
+        posts_item.setPen(QPen(LINE_COLOR, line_width * 0.3))
+        posts_item.setAcceptedMouseButtons(Qt.NoButton)
+        if isinstance(item, EditableItem):
+            item.posts_item = posts_item
     joints = _paver_joints_path(obj.geometry, material, obj.pattern, page_height, units)
     if joints is not None:
         joints_item = QGraphicsPathItem(joints, item)
@@ -569,6 +578,20 @@ def _style_model_footprint(item, obj: ResolvedObject, material: Material, page_h
     label.setBrush(QBrush(TEXT_COLOR))
     c = obj.geometry.centroid
     label.setPos(c.x - label.boundingRect().width() * k / 2, page_height - c.y - 0.2)
+
+
+def _fence_posts_path(geom: BaseGeometry, material: Material, page_height: float, units: str) -> QPainterPath | None:
+    """A fence's posts (every 8 ft) as squares, or None if it isn't a fence
+    material with a recipe (see fences.py)."""
+    from shapely.geometry import MultiPolygon
+
+    from .fences import fence_centerline, fence_posts, fence_spec
+
+    spec = fence_spec(material, units)
+    if spec is None or geom.is_empty:
+        return None
+    posts = fence_posts(fence_centerline(geom), spec.post_spacing, spec.post_size)
+    return _path_for_geometry(MultiPolygon(posts), page_height)
 
 
 def _paver_joints_path(geom: BaseGeometry, material: Material, pattern: str | None, page_height: float,
@@ -2427,6 +2450,12 @@ class EditorWindow(QMainWindow):
         target.setRotation(0)
         target.setScale(1)
         target.setPath(_path_for_geometry(geom, page_height))
+        if target.posts_item is not None:  # re-place the posts for the new size/angle
+            resolved = self.session.resolved.get(target.scene_object.id)
+            posts = _fence_posts_path(geom, self.session.materials.resolve(resolved.material), page_height,
+                                      self.session.doc.units)
+            if posts is not None:
+                target.posts_item.setPath(posts)
         if target.joints_item is not None:  # re-lay the bricks for the new size/angle
             resolved = self.session.resolved.get(target.scene_object.id)
             material = self.session.materials.resolve(resolved.material)
