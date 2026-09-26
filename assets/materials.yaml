@@ -35,6 +35,21 @@ materials:
     texture: {style: stipple, density: 0.4}
     edge: {weight: 0.5, color: null}
 
+  # Textured ground covers (see ground_covers.py), options for the big
+  # circle: rounded river rock (`stone_in` a typical stone, inches) and
+  # turf grass with mowing stripes (`stripe_ft` wide).
+  river_rock:
+    name: River Rock
+    color: "#A8977C"
+    texture: {style: river_rock, stone_in: 4, variation: 0.22}
+    edge: {weight: 0.5, color: null}
+
+  turf:
+    name: Turf Grass
+    color: "#5E9A3C"
+    texture: {style: turf, stripe_ft: 3, variation: 0.1}
+    edge: {weight: 0.5, color: null}
+
   flagstone:
     name: Flagstone
     color: "#9FB4C7"

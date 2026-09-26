@@ -156,6 +156,7 @@ class EditableItem(QGraphicsPathItem):
         self._outline_hit_width = outline_hit_width
         self.joints_item: QGraphicsPathItem | None = None  # paver joints, if the material is a paver
         self.posts_item: QGraphicsPathItem | None = None  # fence posts, if the material is a fence with a recipe
+        self.ground_items: list[QGraphicsPathItem] = []  # river rock stones / turf stripes, if a ground cover
         # Shapely's true centroid (in this item's Qt/y-flipped coordinates),
         # not the bounding-box center: `geometry._apply_transform` pivots
         # scale/rotation about `origin="centroid"`, and for any asymmetric
@@ -545,8 +546,46 @@ def _add_material_item(
         joints_item.setAcceptedMouseButtons(Qt.NoButton)
         if isinstance(item, EditableItem):
             item.joints_item = joints_item
+    ground = _ground_cover_items(obj.geometry, material, page_height, units, line_width, item)
+    if ground and isinstance(item, EditableItem):
+        item.ground_items = ground
     scene.addItem(item)
     return item
+
+
+def _ground_cover_items(geom: BaseGeometry, material: Material, page_height: float, units: str,
+                        line_width: float, parent) -> list:
+    """River rock or turf on the canvas (see ground_covers.py): the stones in
+    three tones with thin darker outlines, or turf's alternate mowing
+    stripes a shade darker. Child items that ignore the mouse, so clicks
+    still select the object."""
+    from shapely.geometry import MultiPolygon
+
+    from .ground_covers import ground_spec, river_rocks, turf_stripes
+
+    spec = ground_spec(material, units)
+    if spec is None:
+        return []
+    base = QColor(material.color)
+    if spec.kind == "turf":
+        groups = [(turf_stripes(geom, spec), base.darker(int(100 / (1 - spec.variation))), Qt.NoPen)]
+    else:
+        stones = river_rocks(geom, spec)
+        pen = QPen(base.darker(165), line_width * 0.2)
+        groups = [([s for s, tone in stones if lo <= tone < hi], shade, pen)
+                  for lo, hi, shade in ((-1.01, -0.33, base.darker(100 + int(60 * spec.variation))),
+                                        (-0.33, 0.33, base),
+                                        (0.33, 1.01, base.lighter(100 + int(60 * spec.variation))))]
+    items = []
+    for shapes, shade, pen in groups:
+        if not shapes:
+            continue
+        child = QGraphicsPathItem(_path_for_geometry(MultiPolygon(shapes), page_height), parent)
+        child.setBrush(QBrush(shade))
+        child.setPen(pen if isinstance(pen, QPen) else QPen(pen))
+        child.setAcceptedMouseButtons(Qt.NoButton)
+        items.append(child)
+    return items
 
 
 MODEL_FOOTPRINT = "#DCD8CE"
@@ -1193,6 +1232,8 @@ class SceneGraphicsView(QGraphicsView):
                 joints = getattr(item, "joints_item", None)
                 if joints is not None:
                     joints.setVisible(full)
+                for child in getattr(item, "ground_items", ()):  # thousands of stones, likewise
+                    child.setVisible(full)
 
     def mousePressEvent(self, event) -> None:
         self._pointer_pos = event.position().toPoint()
@@ -2493,6 +2534,15 @@ class EditorWindow(QMainWindow):
             joints = _paver_joints_path(geom, material, resolved.pattern, page_height, self.session.doc.units)
             if joints is not None:
                 target.joints_item.setPath(joints)
+        if target.ground_items:  # re-lay the stones / stripes for the new size/angle
+            resolved = self.session.resolved.get(target.scene_object.id)
+            for child in target.ground_items:
+                child.setParentItem(None)
+                if child.scene() is not None:
+                    child.scene().removeItem(child)
+            target.ground_items = _ground_cover_items(
+                geom, self.session.materials.resolve(resolved.material), page_height, self.session.doc.units,
+                target.pen().widthF(), target)
         c = geom.centroid
         target.centroid = QPointF(c.x, page_height - c.y)
         self._place_selection_handles(target)

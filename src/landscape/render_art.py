@@ -440,6 +440,41 @@ def _paint_pavers(canvas: _Canvas, obj: ResolvedObject, material: Material, crop
     canvas.multiply(crop, joints, np.clip(_rgb(material.color) * 0.6, 0, 1))
 
 
+def _paint_ground_cover(canvas: _Canvas, obj: ResolvedObject, material: Material, crop, style: ArtStyle,
+                        units: str) -> None:
+    """River rock: each stone a slightly different tone over the wash, with
+    light pencil ovals; turf: the alternate mowing stripes a touch deeper,
+    and scattered pencil tufts of grass (see ground_covers.py)."""
+    from .ground_covers import ground_spec, river_rocks, turf_stripes, turf_tufts
+
+    spec = ground_spec(material, units)
+    if spec is None:
+        return
+    width = style.pencil_width_in * canvas.units_per_inch
+    pigment = np.clip(_rgb(material.color) * 0.55, 0, 1)
+    if spec.kind == "turf":
+        stripes = turf_stripes(obj.geometry, spec)
+        if stripes:
+            from shapely.geometry import MultiPolygon
+
+            mask = _blur(canvas.fill_mask(MultiPolygon(stripes), crop), 0.05 * canvas.ppu)
+            canvas.multiply(crop, mask * spec.variation * 2.5, _pigment(material))
+        tufts = canvas.stroke_mask(turf_tufts(obj.geometry, spec), crop, width * 0.7, 0.5 * style.pencil)
+        canvas.multiply(crop, tufts, pigment)
+        return
+    stones = river_rocks(obj.geometry, spec)
+    if not stones:
+        return
+    surface, ctx = canvas._context(crop)
+    for stone, tone in stones:
+        canvas._trace_area(ctx, stone)
+        ctx.set_source_rgba(0, 0, 0, float(0.5 + 0.5 * tone))
+        ctx.fill()
+    canvas.multiply(crop, canvas._read(surface) * spec.variation * 2.0, _pigment(material))
+    ovals = canvas.stroke_mask([s.exterior for s, _ in stones], crop, width * 0.6, 0.4 * style.pencil)
+    canvas.multiply(crop, ovals, pigment)
+
+
 def _hatch_lines(geom, direction_deg: float, spacing: float, overshoot: float) -> list[BaseGeometry]:
     """Parallel lines across the region at `direction_deg`, clipped to it
     grown by `overshoot` — letting strokes run slightly past the edge is
@@ -571,6 +606,7 @@ def render_art_image(
             canvas.multiply(crop, wash(canvas, geom, crop, style, rng, clouds), _pigment(material))
             _texture(canvas, obj, material, crop, style, rng)
             _paint_pavers(canvas, obj, material, crop, style, rng, doc.units)
+            _paint_ground_cover(canvas, obj, material, crop, style, doc.units)
             _paint_fence_posts(canvas, obj, material, crop, style, doc.units)
 
         # pencil outline: two slightly different passes, like a sketched line

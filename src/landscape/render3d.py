@@ -27,6 +27,7 @@ from .geometry import ResolvedScene
 from .materials import MaterialLibrary
 from .schema import Camera, SceneDocument
 from .fences import fence_centerline, fence_spec
+from .ground_covers import ground_spec
 from .solids import effective_solid
 
 SKY_TOP = "#8FB9E0"
@@ -127,6 +128,20 @@ def _add_fence(plotter, line: LineString, spec, color: str, base: float, height:
         mesh = pv.PolyData(pts, faces=fcs).clean()
         plotter.add_mesh(mesh, color=post_color, ambient=0.55, diffuse=0.45, smooth_shading=False)
         _add_outline(plotter, mesh, "#8A8780" if spec.boards == "vinyl" else OUTLINE, 1.0)
+
+
+def _add_ground_cover(plotter, mesh, spec, color: str, z: float, surface: dict) -> None:
+    """A river rock or turf surface: its texture tiled across the ground in
+    plan coordinates, so stones and stripes keep their real size."""
+    import pyvista as pv
+
+    from .ground_covers import ground_texture
+
+    pixels, tile = ground_texture(spec, color)
+    mesh = mesh.texture_map_to_plane(origin=(0, 0, z), point_u=(tile, 0, z), point_v=(0, tile, z))
+    texture = pv.Texture(pixels)
+    texture.repeat = True
+    plotter.add_mesh(mesh, texture=texture, **surface)
 
 
 def place_models(plotter, scene: ResolvedScene, materials: MaterialLibrary, models_dir=None) -> list[tuple]:
@@ -292,7 +307,11 @@ def render_3d_image(
                 # clean() merges the corner points each face was built with,
                 # so faces share edges and the creases can be found
                 mesh = pv.PolyData(points, faces=faces).clean()
-                plotter.add_mesh(mesh, color=color, **surface)
+                ground = ground_spec(material, doc.units) if material is not None else None
+                if ground is not None:
+                    _add_ground_cover(plotter, mesh, ground, color, top, surface)
+                else:
+                    plotter.add_mesh(mesh, color=color, **surface)
                 if solid.height > 0.05:
                     _add_outline(plotter, mesh, OUTLINE, 1.2)
 

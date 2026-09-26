@@ -18,6 +18,7 @@ from fractions import Fraction
 from pathlib import Path
 
 import cairo
+import numpy as np
 from shapely.geometry.base import BaseGeometry
 
 from .geometry import ResolvedObject, ResolvedScene
@@ -141,6 +142,7 @@ def render_flat(
                 ctx.new_path()
             _draw_paver_joints(ctx, obj, material, page_height, units)
             _draw_fence_posts(ctx, obj, material, page_height, units)
+            _draw_ground_cover(ctx, obj, material, page_height, units)
         else:
             _draw_line_path(ctx, geom, page_height)
             ctx.set_source_rgb(*_rgb01(_edge_color(material)))
@@ -160,6 +162,34 @@ def _draw_paver_joints(ctx: cairo.Context, obj: ResolvedObject, material: Materi
         _draw_polygon_path(ctx, brick, page_height)
     ctx.set_source_rgb(*_rgb01(_darken(material.color, 0.72)))
     ctx.set_line_width(spec.width * 0.06)  # joints about 1/4 in wide on a 4 in brick
+    ctx.stroke()
+
+
+def _draw_ground_cover(ctx: cairo.Context, obj: ResolvedObject, material: Material, page_height: float,
+                       units: str) -> None:
+    """River rock: every stone in its own tone with a thin darker outline;
+    turf: its alternate mowing stripes a shade darker (see ground_covers.py)."""
+    from .ground_covers import ground_spec, river_rocks, turf_stripes
+
+    spec = ground_spec(material, units)
+    if spec is None:
+        return
+    base = np.array(_rgb01(material.color))
+    if spec.kind == "turf":
+        for stripe in turf_stripes(obj.geometry, spec):
+            _draw_polygon_path(ctx, stripe, page_height)
+        ctx.set_source_rgb(*np.clip(base * (1 - spec.variation), 0, 1))
+        ctx.fill()
+        return
+    stones = river_rocks(obj.geometry, spec)
+    for stone, tone in stones:
+        _draw_polygon_path(ctx, stone, page_height)
+        ctx.set_source_rgb(*np.clip(base * (1 + spec.variation * tone), 0, 1))
+        ctx.fill()
+    for stone, _tone in stones:
+        _draw_polygon_path(ctx, stone, page_height)
+    ctx.set_source_rgb(*_rgb01(_darken(material.color, 0.6)))
+    ctx.set_line_width(spec.stone_size * 0.03)
     ctx.stroke()
 
 

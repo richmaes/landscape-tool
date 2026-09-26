@@ -8,7 +8,8 @@ rules:
   - id: no_burnable_in_firepit_keepout
     type: keepout_material_exclusion
     zone_rule: no_burnable_material
-    excluded_materials: [sand_tbd, deck, deck_dark, deck_cedar, deck_weathered]  # every deck wood burns
+    excluded_materials: [sand_tbd, deck, deck_dark, deck_cedar, deck_weathered, turf]  # every deck wood burns; grass scorches
+    # (river rock is the fire-safe option for the circle: not listed)
     # expected to fire: sand_tbd only (site_circle isn't carved out around
     # the keepout). deck_s does NOT fire here: measured against the
     # keepout circle as actually drawn, deck_s is 0.675 ft clear of it.
@@ -38,7 +39,7 @@ rules:
     # ground surfaces other objects legitimately stand on: the circle's fill
     # (gravel since 2026-09-25; sand before), other ground covers, and the
     # brick patio and border (fences are built across them)
-    ignore_materials: [sand_tbd, gravel, lawn, mulch, planting_bed,
+    ignore_materials: [sand_tbd, gravel, lawn, mulch, planting_bed, river_rock, turf,
                        pavers_light_grey, pavers_red, pavers_red_blend, pavers_tan, pavers_charcoal]
     exceptions:
       - [hot_tub, hot_tub_pad]         # the tub sits on its pad by design
