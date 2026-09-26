@@ -69,7 +69,7 @@ objects:
     cx: 18
     cy: 18
     r: 12
-    material: sand_tbd
+    material: gravel
     layer: ground
     z: 1
 
@@ -110,7 +110,7 @@ objects:
     y: 24.448
     width: 4.5
     height: 1.5
-    material: deck
+    material: deck_dark
     layer: structures
     z: 4
     transform:
@@ -125,7 +125,7 @@ objects:
     y: 24.441
     width: 4.5
     height: 1.5
-    material: deck
+    material: deck_dark
     layer: structures
     z: 5
     transform:
@@ -140,7 +140,7 @@ objects:
     y: 22.325
     width: 4.5
     height: 2.0
-    material: deck
+    material: deck_dark
     layer: structures
     z: 6
     transform:
@@ -155,7 +155,7 @@ objects:
     y: 22.296
     width: 4.5
     height: 2.0
-    material: deck
+    material: deck_dark
     layer: structures
     z: 7
     transform:
@@ -198,7 +198,7 @@ objects:
     y: 18.122
     width: 1.106
     height: 4.171
-    material: deck
+    material: deck_dark
     layer: structures
     z: 10
     transform:
@@ -213,7 +213,7 @@ objects:
     y: 18.15
     width: 1.106
     height: 4.171
-    material: deck
+    material: deck_dark
     layer: structures
     z: 11
     transform:
@@ -228,7 +228,7 @@ objects:
     y: 17.64
     width: 9.944
     height: 1.106
-    material: deck
+    material: deck_dark
     layer: structures
     z: 12
     transform:
@@ -324,3 +324,6 @@ objects:
       ty: 2.151598690057405
       rotation: 0.0
       scale: 1.0
+legend:
+  x: 0.835
+  y: 5.436
