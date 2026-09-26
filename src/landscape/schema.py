@@ -402,6 +402,7 @@ class SceneObject:
     boolean: BooleanOp | None = None
     pattern: str | None = None  # paver layout, overriding the material's default (see pavers.py)
     solid: Solid | None = None  # 3D base/height, overriding the material's default (see solids.py)
+    model: str | None = None  # a 3D model file drawn in this element's place in the 3D view (see models.py)
 
 
 @dataclass

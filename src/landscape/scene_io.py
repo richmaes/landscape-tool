@@ -17,6 +17,7 @@ from ruamel.yaml import YAML
 
 from .schema import (
     Camera,
+    Model,
     Definition,
     Placement,
     Solid,
@@ -181,7 +182,21 @@ def _parse_object(obj_id: str, obj_data: Any, doc: SceneDocument) -> SceneObject
         boolean=parse_boolean(obj_data.get("boolean")),
         pattern=_parse_pattern(obj_data),
         solid=parse_solid(obj_data.get("solid")),
+        model=_parse_object_model(obj_data, primitive),
     )
+
+
+def _parse_object_model(obj_data: Any, primitive) -> str | None:
+    """`model: <file>` on any design element (a firepit drawn as the fire
+    bowl in 3D). A `type: model` object names its file with `file:` instead."""
+    value = obj_data.get("model")
+    if value is None:
+        return None
+    if isinstance(primitive, Model):
+        raise SchemaError("a 'model' object names its file with 'file:', not 'model:'")
+    if not isinstance(value, str) or not value.strip():
+        raise SchemaError("'model' must be a model file name, like 'Fire Bowl/fire_bowl.obj'")
+    return value.strip()
 
 
 def parse_solid(data: Any) -> Solid | None:

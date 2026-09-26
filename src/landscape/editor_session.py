@@ -390,6 +390,35 @@ class EditorSession:
         self.recompute()
         self.autosave()
 
+    def set_object_model(self, object_id: str, file: str | None) -> None:
+        """Draw a design element as a 3D model from the models folder (the
+        firepit as the fire bowl), or as its plain shape again with None.
+        A `model` object just switches its file. Undoable; saved as
+        `model:` (or the model object's `file:`)."""
+        from .schema import Model
+
+        obj = self.doc.get(object_id)
+        raw_obj = self.raw_objects.get(object_id)
+        if isinstance(obj.primitive, Model):
+            if not file:
+                raise ValueError("a model object needs a model file")
+            self.push_undo()
+            obj.primitive.file = file
+            if raw_obj is not None:
+                raw_obj["file"] = file
+        else:
+            self.push_undo()
+            obj.model = file or None
+            if raw_obj is not None:
+                comment = _pop_trailing_comment(raw_obj)
+                if file:
+                    raw_obj["model"] = file
+                else:
+                    raw_obj.pop("model", None)
+                _attach_trailing_comment(raw_obj, comment)
+        self.recompute()
+        self.autosave()
+
     def set_rotation(self, object_id: str, value: float) -> None:
         self.push_undo()
         self.doc.get(object_id).transform.rotation = value

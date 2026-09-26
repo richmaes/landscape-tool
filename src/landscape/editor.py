@@ -1339,6 +1339,9 @@ class PropertiesPanel(QWidget):
         self.pattern_combo = QComboBox()
         for key, label in PATTERN_LABELS.items():
             self.pattern_combo.addItem(label, key)
+        self.model_combo = QComboBox()  # filled from the models folder by set_models
+        self.model_combo.setToolTip("Draw this element as a 3D model from the models folder in the 3D view")
+        self.set_models([])
 
         self.relation_type_combo = QComboBox()
         self.relation_type_combo.addItem("(none)", None)
@@ -1369,6 +1372,7 @@ class PropertiesPanel(QWidget):
         layout.addRow("Scale", self.scale_spin)
         layout.addRow("Material", self.material_combo)
         layout.addRow(self.pattern_label, self.pattern_combo)
+        layout.addRow("3D model", self.model_combo)
         layout.addRow("Relation", self.relation_type_combo)
         layout.addRow("Target", self.relation_target_combo)
         layout.addRow(self.relation_param1_label, self.relation_param1_spin)
@@ -1400,6 +1404,27 @@ class PropertiesPanel(QWidget):
         self.relation_target_combo.setCurrentIndex(max(index, 0))
         self.relation_target_combo.blockSignals(False)
 
+    def set_models(self, names: list[str]) -> None:
+        """The models-folder files the "3D model" dropdown offers, after
+        "(plain shape)"."""
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        self.model_combo.addItem("(plain shape)", None)
+        for name in names:
+            self.model_combo.addItem(name, name)
+        self.model_combo.blockSignals(False)
+
+    def _show_model(self, obj: SceneObject) -> None:
+        from .schema import Model
+
+        is_model = isinstance(obj.primitive, Model)
+        current = obj.primitive.file if is_model else obj.model
+        if current and self.model_combo.findData(current) < 0:  # named in the scene, not in the folder
+            self.model_combo.addItem(f"{current} (missing)", current)
+        # A model object is always some model: it has no plain shape to fall back to.
+        self.model_combo.model().item(0).setEnabled(not is_model)
+        self.model_combo.setCurrentIndex(max(self.model_combo.findData(current), 0))
+
     def show_object(self, obj: SceneObject, all_object_ids: list[str]) -> None:
         self.id_label.setText(obj.id)
         widgets = (
@@ -1411,9 +1436,10 @@ class PropertiesPanel(QWidget):
             self.relation_param1_spin,
             self.relation_param2_spin,
         )
-        widgets = (*widgets, self.pattern_combo)
+        widgets = (*widgets, self.pattern_combo, self.model_combo)
         for widget in widgets:
             widget.blockSignals(True)
+        self._show_model(obj)
 
         from .pavers import paver_spec
 
@@ -1734,6 +1760,7 @@ class EditorWindow(QMainWindow):
         self._panel.scale_spin.valueChanged.connect(self._on_scale_changed)
         self._panel.material_combo.currentIndexChanged.connect(self._on_material_changed)
         self._panel.pattern_combo.currentIndexChanged.connect(self._on_pattern_changed)
+        self._panel.model_combo.currentIndexChanged.connect(self._on_model_chosen)
         self._panel.size_width.valueChanged.connect(lambda v: self._on_size_edited("width", v))
         self._panel.size_height.valueChanged.connect(lambda v: self._on_size_edited("height", v))
         self._panel.solid_height.valueChanged.connect(lambda v: self._on_solid_edited("height", v))
@@ -2226,9 +2253,10 @@ class EditorWindow(QMainWindow):
 
         signature = []
         for obj in self.session.doc.objects:
-            if isinstance(obj.primitive, Model):
-                path = find_model(obj.primitive.file, self._models_dir)
-                signature.append((obj.primitive.file, path.stat().st_mtime_ns if path else None))
+            file = obj.primitive.file if isinstance(obj.primitive, Model) else obj.model
+            if file:
+                path = find_model(file, self._models_dir)
+                signature.append((file, path.stat().st_mtime_ns if path else None))
         return tuple(sorted(signature))
 
     def _show_3d_view(self) -> None:
@@ -2381,6 +2409,9 @@ class EditorWindow(QMainWindow):
         if len(items) == 1 and isinstance(items[0], EditableItem):
             self._selected_id = items[0].scene_object.id
             all_ids = [o.id for o in self.session.doc.objects]
+            from .models import available_models
+
+            self._panel.set_models(available_models(self._models_dir))
             self._panel.show_object(items[0].scene_object, all_ids)
             self._show_selected_size()
             self._show_selected_solid()
@@ -2557,6 +2588,14 @@ class EditorWindow(QMainWindow):
         if self._selected_id:
             self.session.set_pattern(self._selected_id, self._panel.pattern_combo.itemData(index))
             self._rebuild_scene()
+
+    def _on_model_chosen(self, index: int) -> None:
+        file = self._panel.model_combo.itemData(index)
+        obj = self.session.doc.get(self._selected_id) if self._selected_id else None
+        if obj is None or file == (getattr(obj.primitive, "file", None) or obj.model):
+            return
+        self.session.set_object_model(self._selected_id, file)
+        QTimer.singleShot(0, self._rebuild_scene)  # not mid-signal: the rebuild re-shows the panel
 
     def _on_material_changed(self, index: int) -> None:
         material_id = self._panel.material_combo.itemData(index)

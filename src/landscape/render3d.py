@@ -156,8 +156,9 @@ def place_models(plotter, scene: ResolvedScene, materials: MaterialLibrary, mode
             placed.append((obj.id, "model", _combined_bounds(actors)))
             continue
         box_mesh = None
+        height = solid.height or 0.5 * min(placement.width, placement.depth)  # no height given: a squat stand-in
         for poly in _polygons(obj.geometry):
-            points, faces = _prism(poly, solid.base, solid.base + solid.height)
+            points, faces = _prism(poly, solid.base, solid.base + height)
             box_mesh = pv.PolyData(points, faces=faces).clean()
             plotter.add_mesh(box_mesh, color=PLACEHOLDER, opacity=0.85, smooth_shading=False, ambient=0.55,
                              diffuse=0.45)

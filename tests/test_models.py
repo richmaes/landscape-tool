@@ -333,3 +333,113 @@ def test_the_generated_fire_bowl_loads_with_its_concrete_and_glowing_fire(tmp_pa
         assert len(glowing) >= 3  # the three flame bands
     finally:
         plotter.close()
+
+
+# --- a 3D model as an option on any design element (the firepit) ---------------------------
+
+
+def _firepit_scene(tmp_path, model_line="    model: fire_bowl.obj\n"):
+    path = tmp_path / "s.yaml"
+    path.write_text(
+        "page_width: 20\npage_height: 20\nscale: 36\nobjects:\n"
+        "  - id: firepit\n    type: ellipse\n    cx: 10\n    cy: 10\n    rx: 1.0\n    ry: 0.95\n"
+        f"{model_line}    layer: structures\n    z: 1\n"
+    )
+    return path
+
+
+def _bowl(models_dir):
+    """A small stand-in 'fire bowl': 2 wide, 2 deep, 1 tall once upright."""
+    import pyvista as pv
+
+    models_dir.mkdir(parents=True, exist_ok=True)
+    pv.Box(bounds=(-1, 1, 0, 1, -1, 1)).save(str(models_dir / "fire_bowl.obj"))
+
+
+def test_any_object_can_name_a_3d_model_and_keeps_its_own_shape(tmp_path):
+    doc = load_scene(_firepit_scene(tmp_path))
+    assert doc.get("firepit").model == "fire_bowl.obj"
+    firepit = resolve_scene(doc).get("firepit")
+    assert firepit.geometry.geom_type == "Polygon"  # still its ellipse on the plan
+    assert firepit.model.file == "fire_bowl.obj"
+    assert (firepit.model.x, firepit.model.y) == pytest.approx((10, 10))
+    assert (firepit.model.width, firepit.model.depth) == pytest.approx((2.0, 1.9), abs=0.02)
+    assert load_scene(_firepit_scene(tmp_path, "")).get("firepit").model is None
+
+
+def test_the_model_is_fitted_to_the_elements_footprint_keeping_proportions(tmp_path):
+    """No height given: the model keeps its own proportions, scaled to fit
+    the footprint (2.0 x 1.9 ft here, so x0.95)."""
+    from landscape.render3d import place_models
+
+    import pyvista as pv
+
+    models = tmp_path / "models"
+    _bowl(models)
+    doc = load_scene(_firepit_scene(tmp_path))
+    plotter = pv.Plotter(off_screen=True)
+    try:
+        [(object_id, kind, bounds)] = place_models(plotter, resolve_scene(doc), load_materials(MATERIALS), models)
+    finally:
+        plotter.close()
+    assert (object_id, kind) == ("firepit", "model")
+    assert bounds == pytest.approx((9.05, 10.95, 9.05, 10.95, 0, 0.95), abs=0.02)
+
+
+def test_a_missing_elements_model_draws_a_placeholder(tmp_path):
+    from landscape.render3d import place_models
+
+    import pyvista as pv
+
+    doc = load_scene(_firepit_scene(tmp_path))
+    plotter = pv.Plotter(off_screen=True)
+    try:
+        [(_, kind, bounds)] = place_models(plotter, resolve_scene(doc), load_materials(MATERIALS), tmp_path / "none")
+    finally:
+        plotter.close()
+    assert kind == "placeholder" and bounds[5] > 0.3  # a visible stand-in, not a flat outline
+
+
+def test_choosing_a_model_is_saved_undoable_and_removable(tmp_path):
+    from landscape.editor_session import EditorSession
+
+    path = _firepit_scene(tmp_path, "")
+    session = EditorSession(str(MATERIALS))
+    session.load(path)
+
+    session.set_object_model("firepit", "Fire Bowl/fire_bowl.obj")
+    session.save()
+    assert "    model: Fire Bowl/fire_bowl.obj\n" in path.read_text()
+    session.set_object_model("firepit", None)
+    session.save()
+    assert "model:" not in path.read_text()
+    session.undo()
+    assert session.doc.get("firepit").model == "Fire Bowl/fire_bowl.obj"
+
+
+def test_the_panel_offers_the_folders_models_for_the_selected_element(qtbot, tmp_path):
+    from landscape.editor import EditorWindow
+    from test_editor import _select_only
+
+    models = tmp_path / "models"
+    _bowl(models / "Fire Bowl")
+    window = EditorWindow(materials_path=str(MATERIALS), models_dir=models)
+    qtbot.addWidget(window)
+    window.load_scene(_firepit_scene(tmp_path, ""))
+    _select_only(window, "firepit")
+    combo = window._panel.model_combo
+    assert [combo.itemData(i) for i in range(combo.count())] == [None, "Fire Bowl/fire_bowl.obj"]
+    assert combo.currentData() is None
+
+    combo.setCurrentIndex(combo.findData("Fire Bowl/fire_bowl.obj"))
+
+    assert window.session.doc.get("firepit").model == "Fire Bowl/fire_bowl.obj"
+    assert window._selected_id == "firepit"
+    assert window._panel.model_combo.currentData() == "Fire Bowl/fire_bowl.obj"
+
+
+def test_an_elements_model_turns_with_the_element(tmp_path):
+    path = _firepit_scene(tmp_path, "    model: fire_bowl.obj\n    transform: {rotation: 30}\n")
+    placement = resolve_scene(load_scene(path)).get("firepit").model
+    assert placement.rotation == 30
+    assert (placement.width, placement.depth) == pytest.approx((2.0, 1.9), abs=0.02)  # its own size, not the turned box's

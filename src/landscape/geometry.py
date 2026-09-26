@@ -156,12 +156,25 @@ class ModelPlacement:
 
 
 def _model_placement(obj: SceneObject, footprint: BaseGeometry) -> "ModelPlacement | None":
+    if obj.model is not None and not footprint.is_empty:
+        return _element_model_placement(obj.model, footprint, obj.transform.rotation)
     if not isinstance(obj.primitive, Model):
         return None
     p, t = obj.primitive, obj.transform
     c = footprint.centroid
     return ModelPlacement(file=p.file, x=c.x, y=c.y, width=p.width * t.scale, depth=p.depth * t.scale,
                           rotation=p.rotation + t.rotation, up=p.up)
+
+
+def _element_model_placement(file: str, footprint: BaseGeometry, rotation: float) -> ModelPlacement:
+    """A design element drawn as a model (`model:` on the firepit): the model
+    fills the element's footprint, measured in the element's own frame (its
+    transform's rotation undone) so the model turns with the element."""
+    c = footprint.centroid
+    upright = affinity.rotate(footprint, -rotation, origin=c)
+    x0, y0, x1, y1 = upright.bounds
+    mid = affinity.rotate(Point((x0 + x1) / 2, (y0 + y1) / 2), rotation, origin=c)
+    return ModelPlacement(file=file, x=mid.x, y=mid.y, width=x1 - x0, depth=y1 - y0, rotation=rotation, up="")
 
 
 def resolve_scene(doc: SceneDocument) -> ResolvedScene:

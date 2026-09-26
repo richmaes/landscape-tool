@@ -55,6 +55,7 @@ def find_model(name: str, directory: Path | None = None) -> Path | None:
 def missing_models(doc: SceneDocument, directory: Path | None = None) -> list[str]:
     """The model files a scene uses that the folder doesn't have."""
     names = {o.primitive.file for o in doc.objects if isinstance(o.primitive, Model)}
+    names |= {o.model for o in doc.objects if o.model}  # design elements drawn as a model (the firepit)
     return sorted(n for n in names if find_model(n, directory) is None)
 
 
