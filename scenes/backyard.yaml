@@ -334,6 +334,7 @@ objects:
       ty: 2.151598690057405
       rotation: 0.0
       scale: 1.0
+    model: Fire Bowl/fire_bowl.obj
 legend:
   x: 0.835
   y: 5.436
