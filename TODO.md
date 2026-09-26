@@ -443,47 +443,49 @@ Gaps found, most important first:
 
 
 
-## M11 — 3D view  *(requirements captured and answered 2026-09-25; PyVista prototype works; not started in the project)*
+## M11 — 3D view  *(built 2026-09-25: heights, cameras, the 3D view mode and exports; the backyard's own heights and camera still to add)*
 
 A third view — **Design | Art preview | 3D view** — showing the backyard in perspective from a camera placed in the plan. Full requirements, proposed default heights and open questions: `docs/3d-view-requirements.md`. Decide its open questions (heights, camera controls, style, renderer technology) before building.
 
 **Camera**
-- [ ] Camera model: `id`, `x`, `y`, `z` (eye height), a **look-at point** `look_x`/`look_y`/`look_z` (decided — Rich), `fov`; several named cameras per scene
-- [ ] Schema + round-trip: optional top-level `cameras:` list, written only once one exists (untouched files stay byte-identical); validation with line numbers
-- [ ] Design-mode camera marker plus a draggable **look-at marker** joined by a line, with the field-of-view wedge; drag either — undoable, saved, never drags the selected object, recomputes on release
-- [ ] Properties panel for a selected camera: X, Y, Z, look-at X, Y, Z, field of view as typed values (heading/tilt shown read-only)
-- [ ] Create / delete / rename cameras; a chooser for the camera the 3D view uses
-- [ ] Cameras excluded from the legend, rule checker, Tab cycling, and exports (unless asked for)
+- [x] Camera model: `id`, `x`, `y`, `z` (eye height), a **look-at point** `look_x`/`look_y`/`look_z` (decided — Rich), `fov`; several named cameras per scene
+- [x] Schema + round-trip: optional top-level `cameras:` list, written only once one exists (untouched files stay byte-identical); validation with line numbers
+- [x] Design-mode camera marker plus a draggable **look-at marker** joined by a line, with the field-of-view wedge; drag either — undoable, saved, never drags the selected object, recomputes on release
+- [x] Properties panel for a selected camera (as a **3D camera** section under the object panel, always available): X, Y, Z, look-at X, Y, Z, field of view as typed values (heading/tilt shown read-only)
+- [x] Create / delete cameras; a chooser for the camera the 3D view uses (rename: not yet)
+- [x] Cameras excluded from the legend, rule checker, Tab cycling, and plan exports
 
 **Heights**
-- [ ] Object-level `base` (elevation) and `height`, optional in YAML, round-trip losslessly
-- [ ] Material-level default heights (e.g. deck 1.5 ft, pad 0.33 ft, ground surfaces 0) so most objects need nothing written
-- [ ] Use `fence_line`'s existing `height` / `post_spacing` / `post_size` / `rail_count`
-- [ ] Properties panel **Height** row (and base), editable like Size
+- [x] Object-level base and height — as a nested `solid: {base, height}` (a rect's `height` is already its 2D height) — optional, round-trips losslessly
+- [x] Material-level default heights (e.g. deck 1.5 ft, pad 0.33 ft, ground surfaces 0) so most objects need nothing written
+- [~] Use `fence_line`'s existing `height` (done) / `post_spacing` / `post_size` / `rail_count` (posts and rails not modelled yet — fences are slabs)
+- [x] Properties panel **Height** row (and base), editable like Size
 - [ ] Backyard heights: hot tub 3 ft on its pad (**confirmed**); deck multi-level — north 1.5 ft, middle 1 ft, forward 6 in (**decided**; tier-to-object mapping to confirm); fences, firepit, water features still to confirm
 - [ ] `sits_on:` relation so stacked things (tub on pad, planters on deck) follow what they rest on
 - [ ] Flat ground at z = 0 for now; real grade stays an open question
 
 **Rendering**
-- [ ] Renderer: **PyVista/VTK** recommended (Rich asked to leverage an existing engine; prototype renders the backyard in < 1 s with look-at camera, flat shading, outlines, sky) — pending OK on the ~520 MB dependency; fallback: small in-house renderer
-- [ ] Extrude each resolved 2D shape from base to base + height (holes carried through); flat objects as ground polygons in paint order
+- [x] Renderer: **PyVista/VTK** — approved by Rich, added (Rich asked to leverage an existing engine; prototype renders the backyard in < 1 s with look-at camera, flat shading, outlines, sky) — pending OK on the ~520 MB dependency; fallback: small in-house renderer
+- [x] Extrude each resolved 2D shape from base to base + height (holes carried through); flat objects as ground polygons in paint order
 - [ ] Fences as posts and rails; tree crowns as trunk + crown (not extrusions)
-- [ ] Perspective projection with correct hiding (nearer objects in front), clipping behind the camera
-- [ ] First style: flat-shaded material colors with simple sun lighting and silhouette/crease outlines (**decided**: flat-shaded first)
-- [ ] **Background: a surrounding 6 ft vinyl fence with sky above** (decided — Rich); on the page boundary until the real yard boundary is known, then real `fence_line` objects
-- [ ] Ground layers stacked properly (the prototype hid the sand circle under the patio)
+- [x] Perspective projection with correct hiding (nearer objects in front), clipping behind the camera
+- [x] First style: flat-shaded material colors with simple sun lighting and silhouette/crease outlines (**decided**: flat-shaded first)
+- [x] **Background: a surrounding 6 ft vinyl fence with sky above** (decided — Rich); on the page boundary until the real yard boundary is known, then real `fence_line` objects
+- [x] Ground layers stacked properly (the prototype hid the sand circle under the patio)
 - [ ] Pavers as a surface texture (joints), not ~6,000 bricks of geometry
 - [ ] Later style: watercolor-and-pencil perspective (washes from color regions, pencil from depth/normal edges), reusing the art renderer
 
 **Editor and exports**
-- [ ] **3D view** toolbar button and View menu entry (shortcut), read-only like Art preview, camera chooser in the toolbar; cached by document revision + camera
-- [ ] `3d` render mode in `render.py`; `landscape render --mode 3d --camera NAME`; `mode: 3d` + `camera:` in export recipes; Export dialog Style entry
+- [x] **3D view** toolbar button and View menu entry (shortcut), read-only like Art preview, camera chooser in the toolbar; cached by document revision + camera
+- [x] `3d` render mode in `render.py`; `landscape render --mode 3d --camera NAME`; `mode: 3d` + `camera:` in export recipes; Export dialog Style entry
 
 **Validation**
-- [ ] Camera math against hand-computed points (centre, off-axis angle, behind-camera culling, occlusion)
-- [ ] Heights and cameras round-trip; untouched scenes byte-identical
-- [ ] Real-drag tests for moving/turning the camera (like `test_movement.py`)
-- [ ] Determinism; preview speed target (backyard < ~1 s at screen resolution)
+- [x] Camera math against hand-computed points (centre, off-axis angle, behind-camera culling, occlusion)
+- [x] Heights and cameras round-trip; untouched scenes byte-identical
+- [x] Real-drag tests for moving/turning the camera (like `test_movement.py`)
+- [x] Determinism; preview speed target (backyard < ~1 s at screen resolution)
+- [ ] **Known intermittent issue (2026-09-25):** one full test run of 558 hung once — the second of two back-to-back runs — and ignored the timeout's stop signal (stuck in native code; likeliest VTK and Qt sharing a process). Not reproduced in 8 further full runs. If it recurs: render 3D in a separate process, and add a per-test timeout to the suite.
+- [ ] Backyard scene: add the decided heights (hot tub 3 ft on its 0.33 ft pad; deck north 1.5 ft, middle 1 ft, forward 0.5 ft) and a first camera — waiting on Rich's in-progress edits to `scenes/backyard.yaml`
 
 ## Feature backlog
 
