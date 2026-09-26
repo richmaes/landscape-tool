@@ -57,6 +57,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -854,6 +855,25 @@ def add_camera_items(gscene: QGraphicsScene, doc: SceneDocument,
     return {camera.id: CameraRig(gscene, camera, doc.page_height, on_moved) for camera in doc.cameras}
 
 
+class View3D(QLabel):
+    """Where the 3D view is shown: the rendered picture, scaled to fit, or a
+    hint when there's no camera yet. Emits `resized` so the window can
+    re-render at the new size once resizing settles."""
+
+    resized = Signal()
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setAlignment(Qt.AlignCenter)
+        self.setMinimumSize(200, 150)
+        self.setWordWrap(True)
+        self.setStyleSheet("background: #EEF4F8; color: #3A3833;")
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.resized.emit()
+
+
 class CameraPanel(QGroupBox):
     """The right column's 3D camera section (M11): which camera the 3D view
     uses, add/delete, and its values typed in. Separate from the properties
@@ -1605,6 +1625,12 @@ class EditorWindow(QMainWindow):
         # Design / Art preview (M6). The preview is a read-only painting of
         # the scene laid over the page; see _show_art_preview.
         self._art_mode = False
+        self._3d_mode = False
+        self._3d_cache: dict[tuple, "QPixmap"] = {}  # (revision, camera, size, layers) -> picture
+        self._3d_resize_timer = QTimer(self)
+        self._3d_resize_timer.setSingleShot(True)
+        self._3d_resize_timer.setInterval(150)  # re-render once resizing settles
+        self._3d_resize_timer.timeout.connect(self._show_3d_view)
         self._art_cache: dict[tuple, tuple[float, "QPixmap"]] = {}  # key -> (dpi, pixmap), oldest first
         self._art_rendered_dpi = 0.0
         self._art_zoom_timer = QTimer(self)
@@ -1641,8 +1667,14 @@ class EditorWindow(QMainWindow):
         right_layout.addWidget(self._camera_panel)
         right_layout.addStretch(1)
 
+        self._view3d = View3D()
+        self._view3d.resized.connect(lambda: self._3d_mode and self._3d_resize_timer.start())
+        self._left_stack = QStackedWidget()
+        self._left_stack.addWidget(self._view)
+        self._left_stack.addWidget(self._view3d)
+
         splitter = QSplitter()
-        splitter.addWidget(self._view)
+        splitter.addWidget(self._left_stack)
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 4)
         splitter.setStretchFactor(1, 1)
@@ -1709,12 +1741,16 @@ class EditorWindow(QMainWindow):
         self._art_action = view_menu.addAction("&Art preview")
         self._art_action.setShortcut(QKeySequence("Ctrl+2"))
         self._art_action.setToolTip("Preview the watercolor-and-pencil art render; read-only (Ctrl+2)")
-        for action in (self._design_action, self._art_action):
+        self._view3d_action = view_menu.addAction("&3D view")
+        self._view3d_action.setShortcut(QKeySequence("Ctrl+3"))
+        self._view3d_action.setToolTip("See the plan in 3D from the chosen camera; read-only (Ctrl+3)")
+        for action in (self._design_action, self._art_action, self._view3d_action):
             action.setCheckable(True)
             mode_group.addAction(action)
         self._design_action.setChecked(True)
-        self._design_action.triggered.connect(lambda: self._set_art_mode(False))
-        self._art_action.triggered.connect(lambda: self._set_art_mode(True))
+        self._design_action.triggered.connect(lambda: self._set_view_mode("design"))
+        self._art_action.triggered.connect(lambda: self._set_view_mode("art"))
+        self._view3d_action.triggered.connect(lambda: self._set_view_mode("3d"))
 
         toolbar = self.addToolBar("File")
         toolbar.setMovable(False)
@@ -1727,6 +1763,7 @@ class EditorWindow(QMainWindow):
         toolbar.addSeparator()
         toolbar.addAction(self._design_action)
         toolbar.addAction(self._art_action)
+        toolbar.addAction(self._view3d_action)
 
         create_menu = self.menuBar().addMenu("&Create")
         for kind in CREATABLE_PRIMITIVE_KINDS:
@@ -1964,6 +2001,8 @@ class EditorWindow(QMainWindow):
         self._update_status_bar()
         if self._art_mode:  # after the rule-violation summary, which would otherwise replace it
             self.statusBar().showMessage("Art preview — read-only. Switch to Design (Ctrl+1) to edit.")
+        if self._3d_mode:
+            self._show_3d_view()
         self._undo_action.setEnabled(self.session.can_undo)
         self._redo_action.setEnabled(self.session.can_redo)
 
@@ -2020,10 +2059,68 @@ class EditorWindow(QMainWindow):
     # --- Design / Art preview ---------------------------------------------
 
     def _set_art_mode(self, on: bool) -> None:
-        if on == self._art_mode:
+        self._set_view_mode("art" if on else "design")
+
+    def _set_view_mode(self, mode: str) -> None:
+        """Design, Art preview (painted over the plan canvas) or 3D view (a
+        picture in place of the canvas)."""
+        art, three = mode == "art", mode == "3d"
+        if (art, three) == (self._art_mode, self._3d_mode):
             return
-        self._art_mode = on
-        self._rebuild_scene()  # rebuilds the design items, then (if on) paints over them
+        self._art_mode, self._3d_mode = art, three
+        self._left_stack.setCurrentWidget(self._view3d if three else self._view)
+        self._rebuild_scene()  # rebuilds the design items, then paints the art preview or the 3D view
+
+    # --- 3D view (M11) --------------------------------------------------------
+
+    def _show_3d_view(self) -> None:
+        """Render the active camera's view at the widget's size (in device
+        pixels, so it's sharp on a Retina screen), from a small cache keyed
+        by the document's revision, the camera, the size and hidden layers."""
+        if not self._3d_mode:
+            return
+        from PySide6.QtGui import QImage, QPixmap
+        from PySide6.QtWidgets import QApplication
+
+        from . import render3d
+        from .geometry import ResolvedScene
+
+        camera = next((c for c in self.session.doc.cameras if c.id == self._active_camera_id), None)
+        if camera is None:
+            self._view3d.setPixmap(QPixmap())
+            self._view3d.setText(
+                "No camera yet.\n\nClick Add in the 3D camera section to place one on the plan — "
+                "then drag its blue eye marker to where you'd stand and its orange crosshair to what you'd look at."
+            )
+            self.statusBar().showMessage("3D view — add a camera to see the plan in 3D.")
+            return
+        dpr = self._view3d.devicePixelRatioF()
+        width = max(64, round(self._view3d.width() * dpr))
+        height = max(48, round(self._view3d.height() * dpr))
+        from dataclasses import astuple
+
+        key = (self.session.revision, astuple(camera), width, height, frozenset(self._hidden_layers))
+        pixmap = self._3d_cache.get(key)
+        if pixmap is None:
+            scene = ResolvedScene(objects=[o for o in self.session.resolved.objects if o.layer not in self._hidden_layers])
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                image = render3d.render_3d_image(self.session.doc, scene, self.session.materials, camera,
+                                                 width=width, height=height)
+            finally:
+                QApplication.restoreOverrideCursor()
+            data = image.tobytes()
+            qimage = QImage(data, image.width, image.height, image.width * 3, QImage.Format_RGB888).copy()
+            pixmap = QPixmap.fromImage(qimage)
+            pixmap.setDevicePixelRatio(dpr)
+            self._3d_cache[key] = pixmap
+            while len(self._3d_cache) > 6:
+                self._3d_cache.pop(next(iter(self._3d_cache)))
+        self._view3d.setText("")
+        self._view3d.setPixmap(pixmap)
+        self.statusBar().showMessage(
+            f"3D view — from camera '{camera.id}'. Adjust it in the 3D camera section; Ctrl+1 to edit the plan."
+        )
 
     def _art_preview_dpi(self) -> float:
         """About one rendered pixel per screen pixel at the current zoom —
