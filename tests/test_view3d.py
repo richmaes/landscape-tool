@@ -143,3 +143,22 @@ def test_with_no_camera_it_says_how_to_add_one(qtbot, tmp_path, renders):
     assert "camera" in window._view3d.text().lower()
     window._camera_panel.add_button.click()
     assert renders and renders[-1]["camera"].id == "view_1"
+
+
+def test_the_export_dialog_offers_the_3d_view(qtbot, tmp_path, renders, monkeypatch):
+    from PIL import Image
+
+    from test_editor import _trigger_export
+
+    window = _editor(qtbot, tmp_path)
+    out = tmp_path / "view.png"
+
+    def configure(dialog):
+        dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("3d"))
+        assert dialog.camera_combo.isEnabled() and dialog.camera_combo.currentText() == "from_gate"
+        dialog.size_combo.setCurrentIndex(0)
+
+    _trigger_export(window, monkeypatch, out, configure)
+
+    with Image.open(out) as img:
+        assert img.size == tuple(window._last_export_options["size"])

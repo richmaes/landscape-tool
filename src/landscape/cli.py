@@ -28,7 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("scene", help="Path to a scene YAML file")
     render.add_argument(
         "--mode",
-        choices=["flat", "art"],
+        choices=["flat", "art", "3d"],
         default="flat",
         help="Render mode: flat pastel color-coding or hand-drawn watercolor-and-pencil art",
     )
@@ -36,6 +36,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--wash", choices=["diffuse", "layered"], default="diffuse", help="Art mode: watercolor wash technique"
     )
     render.add_argument("--paper-image", default=None, help="Art mode: a paper scan to paint on (PNG/JPEG)")
+    render.add_argument("--camera", default=None, help="3D mode: which of the scene's cameras (default: the first)")
+    render.add_argument("--size", default="1600x1000", help="3D mode: picture size in pixels, WIDTHxHEIGHT")
     render.add_argument("--out", required=True, help="Output file path (.svg, .pdf, or .png)")
     render.add_argument(
         "--materials", default="assets/materials.yaml", help="Path to a material library YAML file"
@@ -114,7 +116,16 @@ def main(argv: list[str] | None = None) -> int:
             from .render_art import ArtStyle
 
             kwargs["style"] = ArtStyle(wash=args.wash, paper_image=args.paper_image)
-        render_to_file(doc, scene, materials, out_path, mode=args.mode, **kwargs)
+        if args.mode == "3d":
+            try:
+                width, height = (int(v) for v in args.size.lower().split("x"))
+            except ValueError:
+                parser.exit(1, f"landscape render: --size must look like 1600x1000, not '{args.size}'\n")
+            kwargs = {"camera": args.camera, "width": width, "height": height}
+        try:
+            render_to_file(doc, scene, materials, out_path, mode=args.mode, **kwargs)
+        except ValueError as exc:
+            parser.exit(1, f"landscape render: {exc}\n")
         print(f"landscape render: wrote {out_path}")
 
     elif args.command == "export":

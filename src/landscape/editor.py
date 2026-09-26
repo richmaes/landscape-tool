@@ -1494,7 +1494,10 @@ class ExportOptionsDialog(QDialog):
         "north_deg": 0.0,
     }
 
-    def __init__(self, parent: QWidget | None, path: str | Path, show_annotations: bool, previous: dict | None = None):
+    SIZES_3D = ((1600, 1000), (2400, 1500), (3200, 2000))
+
+    def __init__(self, parent: QWidget | None, path: str | Path, show_annotations: bool, previous: dict | None = None,
+                 cameras: list[str] | None = None, active_camera: str | None = None):
         super().__init__(parent)
         self.setWindowTitle("Export options")
         self._path = Path(path)
@@ -1503,11 +1506,21 @@ class ExportOptionsDialog(QDialog):
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("Design (flat colors)", "flat")
         self.mode_combo.addItem("Art (watercolor and pencil)", "art")
+        self.mode_combo.addItem("3D view (from a camera)", "3d")
         self.mode_combo.setCurrentIndex(self.mode_combo.findData(values["mode"]))
         self.wash_combo = QComboBox()
         self.wash_combo.addItem("Diffuse (soft, pooled edges)", "diffuse")
         self.wash_combo.addItem("Layered (crisp glazes)", "layered")
         self.wash_combo.setCurrentIndex(self.wash_combo.findData(values["wash"]))
+        self.camera_combo = QComboBox()
+        self.camera_combo.addItems(cameras or [])
+        if active_camera:
+            self.camera_combo.setCurrentText(active_camera)
+        self.size_combo = QComboBox()
+        for w, h in self.SIZES_3D:
+            self.size_combo.addItem(f"{w} × {h} px", (w, h))
+        remembered_size = tuple(values.get("size", self.SIZES_3D[0]))
+        self.size_combo.setCurrentIndex(max(0, self.size_combo.findData(remembered_size)))
 
         self.dpi_spin = QSpinBox()
         self.dpi_spin.setRange(36, 1200)
@@ -1545,6 +1558,8 @@ class ExportOptionsDialog(QDialog):
         layout = QFormLayout(self)
         layout.addRow("Style", self.mode_combo)
         layout.addRow("Wash", self.wash_combo)
+        layout.addRow("Camera", self.camera_combo)
+        layout.addRow("Picture size", self.size_combo)
         layout.addRow("Resolution", self.dpi_spin)
         layout.addRow(self.legend_check)
         layout.addRow(self.scale_indicator_check)
@@ -1560,6 +1575,12 @@ class ExportOptionsDialog(QDialog):
         mode = self.mode_combo.currentData()
         self.dpi_spin.setEnabled(takes_dpi(self._path, mode))
         self.wash_combo.setEnabled(mode == "art")
+        is_3d = mode == "3d"
+        self.camera_combo.setEnabled(is_3d and self.camera_combo.count() > 0)
+        self.size_combo.setEnabled(is_3d)
+        for check in (self.legend_check, self.scale_indicator_check, self.annotations_check,
+                      self.scale_bar_check, self.north_arrow_check):
+            check.setEnabled(not is_3d)  # plan-only; a 3D picture has no legend or scale
 
     def remembered(self) -> dict:
         """Every choice, for pre-filling the next export (DPI and wash
@@ -1574,6 +1595,7 @@ class ExportOptionsDialog(QDialog):
             "scale_bar": self.scale_bar_check.isChecked(),
             "north_arrow": self.north_arrow_check.isChecked(),
             "north_deg": self.north_angle_spin.value(),
+            "size": self.size_combo.currentData(),
         }
 
     def options(self) -> dict:
@@ -1581,6 +1603,10 @@ class ExportOptionsDialog(QDialog):
         from .render_art import ArtStyle
 
         options = self.remembered()
+        if options["mode"] == "3d":
+            width, height = options["size"]
+            return {"mode": "3d", "camera": self.camera_combo.currentText() or None, "width": width, "height": height}
+        options.pop("size")
         wash = options.pop("wash")
         if not takes_dpi(self._path, options["mode"]):
             del options["dpi"]  # flat SVG/PDF are vector
@@ -1818,7 +1844,10 @@ class EditorWindow(QMainWindow):
                 self, "Export failed", f"Unsupported file type '{Path(path).suffix}' (use .png, .svg, or .pdf)"
             )
             return
-        dialog = ExportOptionsDialog(self, path, self._show_annotations, self._last_export_options)
+        dialog = ExportOptionsDialog(
+            self, path, self._show_annotations, self._last_export_options,
+            cameras=[c.id for c in self.session.doc.cameras], active_camera=self._active_camera_id,
+        )
         if dialog.exec() != QDialog.Accepted:
             return
         self._last_export_options = dialog.remembered()

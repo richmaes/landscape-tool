@@ -51,7 +51,8 @@ _BOOL_OPTIONS = {
 }
 _NUMBER_OPTIONS = {"dpi": "dpi", "north_angle": "north_deg"}
 _ART_KEYS = {"wash", "paper_image"}
-_OUTPUT_KEYS = {"out", "mode"} | set(_BOOL_OPTIONS) | set(_NUMBER_OPTIONS) | _ART_KEYS
+_3D_KEYS = {"camera", "size"}
+_OUTPUT_KEYS = {"out", "mode"} | set(_BOOL_OPTIONS) | set(_NUMBER_OPTIONS) | _ART_KEYS | _3D_KEYS
 
 
 class RecipeError(ValueError):
@@ -127,8 +128,11 @@ def _parse_output(entry: Any, defaults: dict, base: Path, error) -> OutputSpec:
 
     options = {**defaults, **entry}
     mode = options.get("mode", "flat")
-    if mode not in ("flat", "art"):
-        raise error(entry, f"mode must be 'flat' or 'art', not '{mode}'")
+    if mode not in ("flat", "art", "3d"):
+        raise error(entry, f"mode must be 'flat', 'art' or '3d', not '{mode}'")
+    for key in _3D_KEYS & set(entry):
+        if mode != "3d":
+            raise error(entry, f"{key} only applies to mode: 3d")
     if "dpi" in entry and not takes_dpi(out, mode):
         raise error(entry, "dpi only applies to .png outputs in flat mode (flat SVG and PDF are vector)")
     for key in _ART_KEYS & set(entry):
@@ -157,6 +161,11 @@ def _parse_output(entry: Any, defaults: dict, base: Path, error) -> OutputSpec:
             raise error(entry, f"wash must be one of {', '.join(_WASHES)}, not '{wash}'")
         paper = options.get("paper_image")
         kwargs["style"] = ArtStyle(wash=wash, paper_image=str(_relative_to(base, paper)) if paper else None)
+    if mode == "3d":
+        size = options.get("size", [1600, 1000])
+        if not (isinstance(size, list) and len(size) == 2 and all(isinstance(v, int) and v > 0 for v in size)):
+            raise error(entry, "size must be [width, height] in pixels, e.g. [1600, 1000]")
+        kwargs = {"camera": options.get("camera"), "width": size[0], "height": size[1]}
     return OutputSpec(path=out, mode=mode, render_kwargs=kwargs)
 
 

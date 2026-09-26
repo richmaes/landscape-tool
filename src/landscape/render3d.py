@@ -161,3 +161,57 @@ def render_3d_image(
     finally:
         plotter.close()
     return Image.fromarray(np.ascontiguousarray(pixels[:, :, :3]), "RGB")
+
+
+# ---------------------------------------------------------------------------
+# Export (M11): the 3D view as PNG, or embedded in PDF/SVG
+# ---------------------------------------------------------------------------
+
+PRINT_DPI = 150.0  # a 3D picture has no plan scale; this sets its print size
+
+
+def resolve_camera(doc: SceneDocument, camera: "Camera | str | None") -> Camera:
+    """A camera object, a camera id from the scene, or None for the scene's
+    first camera."""
+    if isinstance(camera, Camera):
+        return camera
+    if not doc.cameras:
+        raise ValueError("the scene has no camera — add one in the editor's 3D camera section")
+    if camera is None:
+        return doc.cameras[0]
+    for candidate in doc.cameras:
+        if candidate.id == camera:
+            return candidate
+    raise ValueError(f"no camera '{camera}' in the scene (it has: {', '.join(c.id for c in doc.cameras)})")
+
+
+def render_3d_to_file(doc, scene, materials, path, camera=None, width: int = 1600, height: int = 1000,
+                      surround: bool = True) -> None:
+    """The 3D view from `camera` as a `width` x `height` picture: a PNG
+    (DPI recorded as `PRINT_DPI`), or embedded at that size in a PDF/SVG."""
+    import io
+    from pathlib import Path
+
+    import cairo
+
+    image = render_3d_image(doc, scene, materials, resolve_camera(doc, camera), width=width, height=height,
+                            surround=surround)
+    path = Path(path)
+    if path.suffix.lower() == ".png":
+        image.save(str(path), format="PNG", dpi=(PRINT_DPI, PRINT_DPI))
+        return
+    w_pt, h_pt = width / PRINT_DPI * 72, height / PRINT_DPI * 72
+    if path.suffix.lower() == ".pdf":
+        surface = cairo.PDFSurface(str(path), w_pt, h_pt)
+    else:
+        surface = cairo.SVGSurface(str(path), w_pt, h_pt)
+        surface.set_document_unit(cairo.SVGUnit.PT)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+    source = cairo.ImageSurface.create_from_png(buffer)
+    ctx = cairo.Context(surface)
+    ctx.scale(w_pt / width, h_pt / height)
+    ctx.set_source_surface(source, 0, 0)
+    ctx.paint()
+    surface.finish()

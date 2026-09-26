@@ -180,3 +180,98 @@ def test_colours_read_true_to_the_material():
     wall = _obj("wall", box(10, 20, 30, 21), "deck", 8)
     front = _render([wall], LEVEL, lib=lib)[H // 2, W // 2]
     assert np.abs(front - deck).max() < 60
+
+
+# --- 3D exports ------------------------------------------------------------------------
+
+
+def _scene_with_camera(tmp_path):
+    text = (
+        "page_width: 20\npage_height: 20\nscale: 36\nobjects:\n"
+        "  - id: tub\n    type: rect\n    x: 8\n    y: 8\n    width: 4\n    height: 4\n    material: water\n"
+        "    solid: {base: 0, height: 3}\n"
+        "cameras:\n"
+        "  - id: from_gate\n    x: 10\n    y: 1\n    z: 5.5\n    look_x: 10\n    look_y: 10\n    look_z: 1.5\n    fov: 60\n"
+        "  - id: from_side\n    x: 1\n    y: 10\n    z: 5.5\n    look_x: 10\n    look_y: 10\n    look_z: 1.5\n    fov: 60\n"
+    )
+    path = tmp_path / "s.yaml"
+    path.write_text(text)
+    doc = load_scene(path)
+    return path, doc, resolve_scene(doc), load_materials(Path(__file__).parent.parent / "assets" / "materials.yaml")
+
+
+def test_3d_png_export_at_the_requested_size_from_the_named_camera(tmp_path):
+    from PIL import Image
+
+    from landscape.render import render_to_file
+
+    _, doc, scene, materials = _scene_with_camera(tmp_path)
+    a, b = tmp_path / "gate.png", tmp_path / "side.png"
+    render_to_file(doc, scene, materials, a, mode="3d", camera="from_gate", width=320, height=200)
+    render_to_file(doc, scene, materials, b, mode="3d", camera="from_side", width=320, height=200)
+    with Image.open(a) as ia, Image.open(b) as ib:
+        assert ia.size == (320, 200)
+        assert np.asarray(ia).tolist() != np.asarray(ib).tolist()  # different viewpoints, different pictures
+
+
+def test_3d_export_defaults_to_the_first_camera(tmp_path):
+    from PIL import Image
+
+    from landscape.render import render_to_file
+
+    _, doc, scene, materials = _scene_with_camera(tmp_path)
+    render_to_file(doc, scene, materials, tmp_path / "default.png", mode="3d", width=160, height=100)
+    render_to_file(doc, scene, materials, tmp_path / "gate.png", mode="3d", camera="from_gate", width=160, height=100)
+    with Image.open(tmp_path / "default.png") as d, Image.open(tmp_path / "gate.png") as g:
+        assert np.array_equal(np.asarray(d), np.asarray(g))
+
+
+def test_3d_pdf_embeds_the_picture_at_150_dpi(tmp_path):
+    import pdfplumber
+
+    from landscape.render import render_to_file
+
+    _, doc, scene, materials = _scene_with_camera(tmp_path)
+    out = tmp_path / "v.pdf"
+    render_to_file(doc, scene, materials, out, mode="3d", camera="from_gate", width=600, height=375)
+    with pdfplumber.open(out) as pdf:
+        page = pdf.pages[0]
+        assert (round(page.width), round(page.height)) == (round(600 / 150 * 72), round(375 / 150 * 72))
+        assert len(page.images) == 1
+
+
+def test_3d_export_needs_a_camera(tmp_path):
+    from landscape.render import render_to_file
+
+    _, doc, scene, materials = _scene_with_camera(tmp_path)
+    with pytest.raises(ValueError, match="camera 'nope'"):
+        render_to_file(doc, scene, materials, tmp_path / "x.png", mode="3d", camera="nope")
+    doc.cameras = []
+    with pytest.raises(ValueError, match="no camera"):
+        render_to_file(doc, scene, materials, tmp_path / "x.png", mode="3d")
+
+
+def test_cli_renders_a_3d_view(tmp_path):
+    from PIL import Image
+
+    from landscape.cli import main
+
+    path, *_ = _scene_with_camera(tmp_path)
+    out = tmp_path / "cli.png"
+    assert main(["render", str(path), "--mode", "3d", "--camera", "from_side", "--size", "400x250",
+                 "--out", str(out), "--materials", "assets/materials.yaml"]) == 0
+    with Image.open(out) as img:
+        assert img.size == (400, 250)
+
+
+def test_an_export_recipe_can_include_3d_views(tmp_path):
+    from landscape.export_recipe import load_recipe, run_recipe
+
+    path, *_ = _scene_with_camera(tmp_path)
+    recipe = tmp_path / "exports.yaml"
+    recipe.write_text(
+        f"scene: {path}\nmaterials: {Path(__file__).parent.parent / 'assets' / 'materials.yaml'}\noutputs:\n"
+        "  - out: side.png\n    mode: 3d\n    camera: from_side\n    size: [200, 120]\n"
+    )
+    written = run_recipe(load_recipe(recipe))
+    assert written == [tmp_path / "side.png"]
