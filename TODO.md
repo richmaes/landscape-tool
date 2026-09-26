@@ -443,7 +443,7 @@ Gaps found, most important first:
 
 
 
-## M11 — 3D view  *(built 2026-09-25: heights, cameras, the 3D view mode and exports; the backyard's own heights and camera still to add)*
+## M11 — 3D view  *(built 2026-09-25: heights, cameras, the 3D view mode and exports, and the backyard's heights and first camera; later: posts-and-rails fences, tree crowns, `sits_on`, the watercolor 3D style)*
 
 A third view — **Design | Art preview | 3D view** — showing the backyard in perspective from a camera placed in the plan. Full requirements, proposed default heights and open questions: `docs/3d-view-requirements.md`. Decide its open questions (heights, camera controls, style, renderer technology) before building.
 
@@ -485,7 +485,7 @@ A third view — **Design | Art preview | 3D view** — showing the backyard in 
 - [x] Real-drag tests for moving/turning the camera (like `test_movement.py`)
 - [x] Determinism; preview speed target (backyard < ~1 s at screen resolution)
 - [ ] **Known intermittent issue (2026-09-25):** one full test run of 558 hung once — the second of two back-to-back runs — and ignored the timeout's stop signal (stuck in native code; likeliest VTK and Qt sharing a process). Not reproduced in 8 further full runs. If it recurs: render 3D in a separate process, and add a per-test timeout to the suite.
-- [ ] Backyard scene: add the decided heights (hot tub 3 ft on its 0.33 ft pad; deck north 1.5 ft, middle 1 ft, forward 0.5 ft) and a first camera — waiting on Rich's in-progress edits to `scenes/backyard.yaml`
+- [x] Backyard scene: the decided heights (hot tub 3 ft on its 0.33 ft pad; deck north 1.5 ft, middle 1 ft, forward 0.5 ft) and a first camera, `view_1` (standing at (10, 4), eye height 5.5 ft, looking at the hot tub) — added after committing Rich's edits (gravel circle, dark wood decks, legend placed). Firepit and water features left flat until their heights are confirmed.
 
 ## Feature backlog
 

@@ -87,6 +87,7 @@ objects:
       ty: 0.690370709531571
       rotation: 0.0
       scale: 1.0
+    solid: {base: 0, height: 0.33}
 
   - id: hot_tub
     type: rect
@@ -103,6 +104,7 @@ objects:
       ty: 1.1152142230894615
       rotation: 0.0
       scale: 1.0
+    solid: {base: 0.33, height: 3}
 
   - id: deck_nw_green
     type: rect
@@ -118,6 +120,7 @@ objects:
       ty: 1.6993740542315585
       rotation: 0.0
       scale: 1.0
+    solid: {base: 0, height: 1.5}
 
   - id: deck_ne_green
     type: rect
@@ -133,6 +136,7 @@ objects:
       ty: 1.6993740542315603
       rotation: 0.0
       scale: 1.0
+    solid: {base: 0, height: 1.5}
 
   - id: deck_nw_wood
     type: rect
@@ -148,6 +152,7 @@ objects:
       ty: 1.7524794934262964
       rotation: 0.0
       scale: 1.0
+    solid: {base: 0, height: 1.5}
 
   - id: deck_ne_wood
     type: rect
@@ -163,6 +168,7 @@ objects:
       ty: 1.7524794934262964
       rotation: 0.0
       scale: 1.0
+    solid: {base: 0, height: 1.5}
 
   - id: deck_nw_seam
     type: line
@@ -206,6 +212,7 @@ objects:
       ty: 1.7524794934262964
       rotation: 0.0
       scale: 1.0
+    solid: {base: 0, height: 1}
 
   - id: deck_w
     type: rect
@@ -221,6 +228,7 @@ objects:
       ty: 1.6993740542315603
       rotation: 0.0
       scale: 1.0
+    solid: {base: 0, height: 1}
 
   - id: deck_s
     type: rect
@@ -236,6 +244,7 @@ objects:
       ty: 1.2214251014789355
       rotation: 0.0
       scale: 1.0
+    solid: {base: 0, height: 0.5}
 
   - id: fence_enclosure
     type: rect
@@ -327,3 +336,12 @@ objects:
 legend:
   x: 0.835
   y: 5.436
+cameras:
+  - id: view_1
+    x: 10
+    y: 4
+    z: 5.5
+    look_x: 17.97
+    look_y: 23.62
+    look_z: 1.5
+    fov: 60

@@ -1,8 +1,11 @@
 # 3D View — Requirements
 
-**Status:** requirements captured 2026-09-25; Rich's answers recorded the same
-day (see **Decisions** below); a feasibility prototype rendered — nothing built
-into the project yet. The work items are milestone **M11** in `TODO.md`.
+**Status:** built 2026-09-25 — heights (`solid: {base, height}`), cameras with
+a look-at point (canvas markers + a 3D camera panel section), the **3D view**
+mode (flat-shaded, PyVista), and 3D exports (`--mode 3d`, recipes, the Export
+dialog); the backyard has its decided heights and a first camera. Still open:
+see M11 in `TODO.md` (posts-and-rails fences, tree crowns, `sits_on`, the
+watercolor 3D style, firepit/water-feature heights).
 **Asked for by Rich:** "a new mode, a 3D view from a fixed position that we
 can define in the design mode. It will need an X, Y and Z location and a view
 direction. We will want to render the elements in the view. This may drive us
