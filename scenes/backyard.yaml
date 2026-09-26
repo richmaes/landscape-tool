@@ -286,7 +286,7 @@ objects:
     y: 27.092
     width: 19.948
     height: 0.646
-    material: fence
+    material: fence_cedar
     layer: structures
     z: 16
     transform:
