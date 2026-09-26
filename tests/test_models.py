@@ -302,3 +302,34 @@ def test_the_generated_hot_tub_loads_with_its_wood_texture(tmp_path):
         assert all(a.GetMapper().GetInput().GetPointData().GetTCoords() is not None for a in textured)
     finally:
         plotter.close()
+
+
+def test_the_generated_fire_bowl_loads_with_its_concrete_and_glowing_fire(tmp_path):
+    """tools/make_fire_bowl_model.py: a 3.5 ft concrete fire bowl with lava
+    rocks and flames. The concrete keeps its texture (texture coordinates
+    on every face), and the flames glow — their ambient colour is their own
+    bright colour, so they aren't shaded dark on the side away from the sun."""
+    import importlib.util
+
+    import pyvista as pv
+
+    from landscape.models import model_proportions
+    from landscape.render3d import _import_model
+
+    spec = importlib.util.spec_from_file_location("make_fire_bowl_model", REPO / "tools" / "make_fire_bowl_model.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    obj = module.make_fire_bowl(tmp_path / "bowl")
+
+    width, depth, height = model_proportions(obj, across=3.5)
+    assert (width, depth) == pytest.approx((3.5, 3.5), abs=0.01)
+    assert height > 1.33 + 0.5  # the bowl is 16 in; the flames rise well above it
+    plotter = pv.Plotter(off_screen=True)
+    try:
+        actors = _import_model(plotter, obj)
+        textured = [a for a in actors if a.GetTexture() is not None]
+        assert textured and all(a.GetMapper().GetInput().GetPointData().GetTCoords() is not None for a in textured)
+        glowing = [a for a in actors if min(a.GetProperty().GetAmbientColor()[:2]) > 0.4]  # bright red and green: fire
+        assert len(glowing) >= 3  # the three flame bands
+    finally:
+        plotter.close()
