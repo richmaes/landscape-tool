@@ -36,32 +36,9 @@ DEFAULT_MATERIALS = Path(__file__).parent.parent / "assets" / "materials.yaml"
 
 
 
-@pytest.fixture(autouse=True)
-def _answer_close_prompts_with_discard():
-    """Also accepts File > Export's options dialog — see below.
+# The autouse close-prompt fixture lives in conftest.py (applies to every test file).
+from conftest import _answer_close_prompts_with_discard  # noqa: E402,F401 — re-exported for older imports
 
-    Closing an EditorWindow with unsaved changes now asks Save/Discard/
-    Cancel via a modal QMessageBox.question — and pytest-qt closes every
-    registered window at teardown, so any test that leaves edits unsaved
-    would block forever on a dialog nobody answers (a real hang, found
-    the first time this ran). Autouse, so it's set up before `qtbot` and
-    torn down after it: still in effect during qtbot's window cleanup.
-    Tests that check the prompt itself override it with `monkeypatch`."""
-    from unittest.mock import patch
-
-    from PySide6.QtWidgets import QMessageBox
-
-    from PySide6.QtWidgets import QDialog
-
-    from landscape.editor import ExportOptionsDialog
-
-    # Same hazard, same fix: File > Export shows a modal options dialog
-    # after the file picker. Accept it with its defaults unless a test says
-    # otherwise.
-    with patch.object(QMessageBox, "question", return_value=QMessageBox.Discard), patch.object(
-        ExportOptionsDialog, "exec", return_value=QDialog.Accepted
-    ):
-        yield
 
 def _obj(id, geom, material=None, z=0, annotation=False, rule=None):
     return ResolvedObject(id=id, geometry=geom, material=material, layer="default", z=z, annotation=annotation, rule=rule)
@@ -589,7 +566,9 @@ def test_create_menu_lists_every_creatable_kind(qtbot):
     from landscape.editor_session import CREATABLE_PRIMITIVE_KINDS
 
     create_menu = next(a for a in window.menuBar().actions() if a.text() == "&Create").menu()
-    assert len(create_menu.actions()) == len(CREATABLE_PRIMITIVE_KINDS)
+    shapes = [a for a in create_menu.actions() if not a.isSeparator() and a.text() != "&Model…"]
+    assert len(shapes) == len(CREATABLE_PRIMITIVE_KINDS)
+    assert any(a.text() == "&Model…" for a in create_menu.actions())  # models from the local folder
 
 
 def test_create_object_adds_a_new_selectable_item(qtbot):

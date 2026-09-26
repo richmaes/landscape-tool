@@ -504,6 +504,7 @@ def _add_material_item(
     on_drag_start: Callable[[], None] | None = None,
     on_drag_end: Callable[[], None] | None = None,
     units: str = "ft",
+    models_dir=None,
 ) -> QGraphicsPathItem:
     """`line_width` (scene units) is deliberately the same fixed, dark
     charcoal outline for every shape here, regardless of the material's
@@ -526,6 +527,8 @@ def _add_material_item(
 
     item.setBrush(QBrush(fill) if is_area else QBrush(Qt.NoBrush))
     item.setPen(QPen(LINE_COLOR, line_width))
+    if obj.model is not None:
+        _style_model_footprint(item, obj, material, page_height, line_width, models_dir)
     joints = _paver_joints_path(obj.geometry, material, obj.pattern, page_height, units)
     if joints is not None:
         joints_item = QGraphicsPathItem(joints, item)
@@ -535,6 +538,37 @@ def _add_material_item(
             item.joints_item = joints_item
     scene.addItem(item)
     return item
+
+
+MODEL_FOOTPRINT = "#DCD8CE"
+
+
+def _style_model_footprint(item, obj: ResolvedObject, material: Material, page_height: float,
+                           line_width: float, models_dir) -> None:
+    """A `model` object on the plan: its footprint in neutral grey (not the
+    magenta 'no material' fill), labelled with its file — dashed and marked
+    'model missing' when the file isn't in the models folder, so a scene
+    opened on another machine shows at a glance what the 3D view will draw
+    as a placeholder."""
+    from .models import find_model
+
+    found = find_model(obj.model.file, models_dir) is not None
+    if material.id == "__fallback__":
+        item.setBrush(QBrush(QColor(MODEL_FOOTPRINT)))
+    pen = QPen(LINE_COLOR, line_width)
+    if not found:
+        pen.setStyle(Qt.DashLine)
+    item.setPen(pen)
+    label = QGraphicsSimpleTextItem(obj.model.file if found else f"{obj.model.file} (model missing)", item)
+    label.setAcceptedMouseButtons(Qt.NoButton)
+    font = label.font()
+    font.setPixelSize(100)
+    label.setFont(font)
+    k = 0.35 / 100  # about 0.35 ft tall on the plan
+    label.setScale(k)
+    label.setBrush(QBrush(TEXT_COLOR))
+    c = obj.geometry.centroid
+    label.setPos(c.x - label.boundingRect().width() * k / 2, page_height - c.y - 0.2)
 
 
 def _paver_joints_path(geom: BaseGeometry, material: Material, pattern: str | None, page_height: float,
@@ -940,6 +974,7 @@ def build_graphics_scene(
     on_drag_start: Callable[[], None] | None = None,
     on_drag_end: Callable[[], None] | None = None,
     line_width: float = 0.2,
+    models_dir=None,
 ) -> QGraphicsScene:
     """The same picture `render_flat` draws, as interactive QGraphicsItems
     instead of a flattened cairo surface. Pass `doc` (the source
@@ -980,7 +1015,7 @@ def build_graphics_scene(
         scene_object = doc.get(obj.id) if doc is not None else None
         _add_material_item(
             gscene, obj, material, page_height, line_width, scene_object, on_object_moved, on_drag_start, on_drag_end,
-            units=doc.units if doc is not None else "ft",
+            units=doc.units if doc is not None else "ft", models_dir=models_dir,
         )
 
     return gscene
@@ -1632,8 +1667,13 @@ class EditorWindow(QMainWindow):
         self,
         materials_path: str | Path = "assets/materials.yaml",
         rules_path: str | Path | None = None,
+        models_dir: str | Path | None = None,
     ):
         super().__init__()
+        from .models import default_models_dir
+
+        # where 3D model files are looked for (never committed; see models/README.md)
+        self._models_dir = Path(models_dir) if models_dir is not None else default_models_dir()
         # "[*]" is Qt's placeholder: it shows as "*" only while
         # setWindowModified(True) — see _update_save_state.
         self.setWindowTitle("Landscape Editor[*]")
@@ -1741,6 +1781,10 @@ class EditorWindow(QMainWindow):
 
         save_as_action.triggered.connect(_save_as)
 
+        file_menu.addSeparator()
+        file_menu.addAction("Open &models folder").triggered.connect(self._on_open_models_folder)
+        file_menu.addAction("Rescan models folder").triggered.connect(self._on_rescan_models)
+        file_menu.addSeparator()
         export_action = file_menu.addAction("&Export…")
         export_action.triggered.connect(self._on_export)
 
@@ -1795,6 +1839,51 @@ class EditorWindow(QMainWindow):
         for kind in CREATABLE_PRIMITIVE_KINDS:
             action = create_menu.addAction(kind.replace("_", " ").title())
             action.triggered.connect(lambda checked=False, kind=kind: self._on_create_object(kind))
+        create_menu.addSeparator()
+        create_menu.addAction("&Model…").triggered.connect(self._on_create_model)
+
+    # --- 3D models (a local, never-committed folder; see models/README.md) -----
+
+    def _on_create_model(self) -> None:
+        """Create › Model…: choose one of the models in the folder and place
+        it at the page centre, selected, ready for its real size."""
+        from PySide6.QtWidgets import QInputDialog, QMessageBox
+
+        from .models import available_models
+
+        names = available_models(self._models_dir)
+        if not names:
+            QMessageBox.information(
+                self, "No models found",
+                f"There are no model files in\n{self._models_dir}\n\nPut .glb, .gltf, .obj, .3ds, .stl, .ply "
+                "or .wrl files there (File › Open models folder), then try again.",
+            )
+            return
+        name, ok = QInputDialog.getItem(self, "Place a model", f"Models in {self._models_dir}:", names, 0, False)
+        if not ok or not name:
+            return
+        try:
+            object_id = self.session.create_model(name, self._models_dir)
+        except Exception as exc:  # an unreadable file
+            QMessageBox.warning(self, "Can't place model", f"Couldn't read {name}:\n\n{exc}")
+            return
+        self._rebuild_scene()
+        self._view.scene().clearSelection()
+        self._select_item_by_id(object_id)
+        self.statusBar().showMessage(
+            f"Placed {name}, sized by its proportions — set its real size in Size (width x depth) and Height."
+        )
+
+    def _on_open_models_folder(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        self._models_dir.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._models_dir)))
+
+    def _on_rescan_models(self) -> None:
+        self._3d_cache.clear()
+        self._rebuild_scene()
 
     def _on_create_object(self, kind: str) -> None:
         new_id = self.session.create_object(kind)
@@ -1852,7 +1941,10 @@ class EditorWindow(QMainWindow):
             return
         self._last_export_options = dialog.remembered()
         try:
-            self.session.export(path, **dialog.options())
+            options = dialog.options()
+            if options.get("mode") == "3d":
+                options["models_dir"] = self._models_dir
+            self.session.export(path, **options)
         except (ValueError, OSError) as exc:
             QMessageBox.warning(self, "Export failed", str(exc))
             return
@@ -2000,6 +2092,7 @@ class EditorWindow(QMainWindow):
             on_drag_start=self.session.push_undo,
             on_drag_end=self._on_object_drag_end,
             line_width=_line_width_for_zoom(zoom),
+            models_dir=self._models_dir,
         )
         if self.session.rules:
             add_violation_overlays(gscene, self.session.violations, doc.page_height)
@@ -2102,6 +2195,19 @@ class EditorWindow(QMainWindow):
 
     # --- 3D view (M11) --------------------------------------------------------
 
+    def _models_signature(self) -> tuple:
+        """Which model files the scene uses are present, and when they last
+        changed — so adding, replacing or removing one re-renders the view."""
+        from .models import find_model
+        from .schema import Model
+
+        signature = []
+        for obj in self.session.doc.objects:
+            if isinstance(obj.primitive, Model):
+                path = find_model(obj.primitive.file, self._models_dir)
+                signature.append((obj.primitive.file, path.stat().st_mtime_ns if path else None))
+        return tuple(sorted(signature))
+
     def _show_3d_view(self) -> None:
         """Render the active camera's view at the widget's size (in device
         pixels, so it's sharp on a Retina screen), from a small cache keyed
@@ -2128,14 +2234,15 @@ class EditorWindow(QMainWindow):
         height = max(48, round(self._view3d.height() * dpr))
         from dataclasses import astuple
 
-        key = (self.session.revision, astuple(camera), width, height, frozenset(self._hidden_layers))
+        key = (self.session.revision, astuple(camera), width, height, frozenset(self._hidden_layers),
+               self._models_signature())
         pixmap = self._3d_cache.get(key)
         if pixmap is None:
             scene = ResolvedScene(objects=[o for o in self.session.resolved.objects if o.layer not in self._hidden_layers])
             QApplication.setOverrideCursor(Qt.WaitCursor)
             try:
                 image = render3d.render_3d_image(self.session.doc, scene, self.session.materials, camera,
-                                                 width=width, height=height)
+                                                 width=width, height=height, models_dir=self._models_dir)
             finally:
                 QApplication.restoreOverrideCursor()
             data = image.tobytes()
@@ -2223,14 +2330,22 @@ class EditorWindow(QMainWindow):
             self._rebuild_scene()
 
     def _update_status_bar(self) -> None:
+        from .models import missing_models
+
         if not self.session.rules:
-            self.statusBar().clearMessage()
+            message = ""
         elif self.session.violations:
-            self.statusBar().showMessage(
-                f"{len(self.session.violations)} rule violation(s) — hover a highlighted object for details"
-            )
+            message = f"{len(self.session.violations)} rule violation(s) — hover a highlighted object for details"
         else:
-            self.statusBar().showMessage("No rule violations")
+            message = "No rule violations"
+        missing = missing_models(self.session.doc, self._models_dir)
+        if missing:
+            note = f"Models not in {self._models_dir}: {', '.join(missing)} — shown as placeholders in 3D"
+            message = f"{message}  ·  {note}" if message else note
+        if message:
+            self.statusBar().showMessage(message)
+        else:
+            self.statusBar().clearMessage()
 
     def _select_item_by_id(self, object_id: str) -> None:
         for item in self._view.scene().items():

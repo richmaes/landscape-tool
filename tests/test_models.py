@@ -1,0 +1,246 @@
+"""3D models from a local folder (never committed): found by name, placed
+in the scene as a `model` object, fitted to its declared real-world size
+in the 3D view — or drawn as a plain placeholder box when the file isn't
+there, so a scene still works on a machine without the model."""
+
+import os
+import subprocess
+from pathlib import Path
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+import numpy as np  # noqa: E402
+import pytest  # noqa: E402
+
+# PyVista is imported inside the helpers, never at the top of a test file: a
+# real bug — importing it at collection time, before Qt starts, let VTK set
+# up macOS's windowing first; Qt and VTK then fought over it, the whole
+# suite ran twice as slowly and the process hung for minutes at exit.
+
+from landscape.geometry import resolve_scene  # noqa: E402
+from landscape.materials import load_materials  # noqa: E402
+from landscape.models import (  # noqa: E402
+    MODEL_EXTENSIONS,
+    available_models,
+    default_models_dir,
+    find_model,
+    missing_models,
+)
+from landscape.scene_io import load_scene  # noqa: E402
+from landscape.schema import SchemaError, Solid  # noqa: E402
+from landscape.solids import effective_solid  # noqa: E402
+
+REPO = Path(__file__).parent.parent
+MATERIALS = REPO / "assets" / "materials.yaml"
+
+
+def _tall_obj(path: Path) -> Path:
+    """A 2 x 6 x 1 box standing up along Y — how most modelling tools
+    (and glTF) orient 'up'."""
+    import pyvista as pv
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pv.Box(bounds=(-1, 1, 0, 6, -0.5, 0.5)).save(str(path))
+    return path
+
+
+def _scene(tmp_path, file="bench.obj", size="width: 4\n    depth: 2\n    height: 12", extra=""):
+    text = (
+        "page_width: 20\npage_height: 20\nscale: 36\nobjects:\n"
+        f"  - id: bench\n    type: model\n    file: {file}\n    x: 10\n    y: 10\n    {size}\n{extra}"
+    )
+    path = tmp_path / "s.yaml"
+    path.write_text(text)
+    return path
+
+
+# --- the models folder -------------------------------------------------------------------
+
+
+def test_the_models_folder_is_never_committed_except_its_readme():
+    readme = REPO / "models" / "README.md"
+    assert readme.exists()
+    probe = REPO / "models" / "probe.glb"
+    ignored = subprocess.run(["git", "check-ignore", "-q", str(probe)], cwd=REPO).returncode == 0
+    readme_ignored = subprocess.run(["git", "check-ignore", "-q", str(readme)], cwd=REPO).returncode == 0
+    assert ignored and not readme_ignored
+
+
+def test_default_models_dir_is_the_repo_models_folder_unless_overridden(monkeypatch, tmp_path):
+    monkeypatch.delenv("LANDSCAPE_MODELS", raising=False)
+    assert default_models_dir() == REPO / "models"
+    monkeypatch.setenv("LANDSCAPE_MODELS", str(tmp_path))
+    assert default_models_dir() == tmp_path
+
+
+def test_available_models_lists_supported_files_including_subfolders(tmp_path):
+    _tall_obj(tmp_path / "bench.obj")
+    _tall_obj(tmp_path / "furniture" / "chair.obj")
+    (tmp_path / "notes.txt").write_text("not a model")
+    (tmp_path / "hot-tub.fbx").write_text("unsupported format")
+    assert available_models(tmp_path) == ["bench.obj", "furniture/chair.obj"]
+    assert ".glb" in MODEL_EXTENSIONS and ".fbx" not in MODEL_EXTENSIONS
+
+
+def test_find_model_by_path_or_by_file_name_anywhere_in_the_folder(tmp_path):
+    chair = _tall_obj(tmp_path / "furniture" / "chair.obj")
+    assert find_model("furniture/chair.obj", tmp_path) == chair
+    assert find_model("chair.obj", tmp_path) == chair  # moved into a subfolder: still found
+    assert find_model("sofa.obj", tmp_path) is None
+    assert find_model("chair.obj", tmp_path / "nowhere") is None  # no folder at all
+
+
+def test_missing_models_names_what_a_scene_needs_but_the_folder_lacks(tmp_path):
+    models = tmp_path / "models"
+    _tall_obj(models / "bench.obj")
+    doc = load_scene(_scene(tmp_path, extra=(
+        "  - id: tub\n    type: model\n    file: hot-tub.glb\n    x: 5\n    y: 5\n    width: 7\n    depth: 7\n    height: 3\n"
+    )))
+    assert missing_models(doc, models) == ["hot-tub.glb"]
+
+
+# --- the model object ------------------------------------------------------------------------
+
+
+def test_a_model_object_parses_and_its_footprint_is_its_width_and_depth(tmp_path):
+    doc = load_scene(_scene(tmp_path, size="width: 4\n    depth: 2\n    height: 12\n    rotation: 90"))
+    model = doc.get("bench").primitive
+    assert (model.file, model.width, model.depth, model.height, model.rotation) == ("bench.obj", 4, 2, 12, 90)
+    footprint = resolve_scene(doc).get("bench").geometry
+    assert footprint.bounds == pytest.approx((9, 8, 11, 12))  # 4 x 2 turned 90 degrees, centred on (10, 10)
+
+
+def test_a_models_height_is_its_3d_height(tmp_path):
+    scene = resolve_scene(load_scene(_scene(tmp_path)))
+    assert effective_solid(scene.get("bench"), load_materials(MATERIALS)) == Solid(0, 12)
+
+
+@pytest.mark.parametrize("bad, why", [
+    ("width: 0\n    depth: 2\n    height: 3", "width"),
+    ("width: 2\n    depth: 2", "height"),
+])
+def test_a_model_needs_a_positive_size(tmp_path, bad, why):
+    with pytest.raises(SchemaError, match=why):
+        load_scene(_scene(tmp_path, size=bad))
+
+
+def test_a_model_without_a_file_is_an_error(tmp_path):
+    with pytest.raises(SchemaError, match="file"):
+        load_scene(_scene(tmp_path, file="''"))
+
+
+# --- in the 3D view ---------------------------------------------------------------------------
+
+
+def _placed(tmp_path, models_dir, size="width: 4\n    depth: 2\n    height: 12", file="bench.obj"):
+    import pyvista as pv
+
+    from landscape.render3d import place_models
+
+    doc = load_scene(_scene(tmp_path, file=file, size=size))
+    scene = resolve_scene(doc)
+    plotter = pv.Plotter(off_screen=True)
+    try:
+        return place_models(plotter, scene, load_materials(MATERIALS), models_dir)
+    finally:
+        plotter.close()
+
+
+def test_a_found_model_is_stood_upright_and_fitted_to_its_declared_size(tmp_path):
+    """A Y-up 2 x 6 x 1 model declared 4 wide, 2 deep, 12 tall: turned so its
+    'up' is the scene's up, scaled x2 to fill that box exactly, centred on
+    (10, 10) with its bottom on the ground."""
+    models = tmp_path / "models"
+    _tall_obj(models / "bench.obj")
+    [(object_id, kind, bounds)] = _placed(tmp_path, models)
+    assert (object_id, kind) == ("bench", "model")
+    assert bounds == pytest.approx((8, 12, 9, 11, 0, 12), abs=1e-6)
+
+
+def test_a_model_keeps_its_proportions_rather_than_stretching(tmp_path):
+    """Declared 4 x 2 x 6 but the model is 2 x 1 x 6 in shape: it's scaled
+    to fit inside the declared box (x1 here), never distorted to fill it."""
+    models = tmp_path / "models"
+    _tall_obj(models / "bench.obj")
+    [(_, _, bounds)] = _placed(tmp_path, models, size="width: 4\n    depth: 2\n    height: 6")
+    assert bounds == pytest.approx((9, 11, 9.5, 10.5, 0, 6), abs=1e-6)
+
+
+def test_a_missing_model_becomes_a_placeholder_box_of_its_declared_size(tmp_path):
+    [(object_id, kind, bounds)] = _placed(tmp_path, tmp_path / "empty")
+    assert (object_id, kind) == ("bench", "placeholder")
+    assert bounds == pytest.approx((8, 12, 9, 11, 0, 12), abs=1e-6)
+
+
+def test_the_3d_view_draws_the_placeholder(tmp_path):
+    from landscape.render3d import render_3d_image
+    from landscape.schema import Camera
+
+    doc = load_scene(_scene(tmp_path))
+    scene = resolve_scene(doc)
+    camera = Camera("c", x=10, y=1, z=5, look_x=10, look_y=10, look_z=5, fov=60)
+    with_model = np.asarray(render_3d_image(doc, scene, load_materials(MATERIALS), camera, 200, 150,
+                                            surround=False, models_dir=tmp_path / "empty"), int)
+    doc.objects.clear()
+    doc.resolution_order.clear()
+    empty = np.asarray(render_3d_image(doc, resolve_scene(doc), load_materials(MATERIALS), camera, 200, 150,
+                                       surround=False, models_dir=tmp_path / "empty"), int)
+    assert np.abs(with_model[75, 100] - empty[75, 100]).max() > 20  # something stands there
+
+
+# --- placing one in the editor -------------------------------------------------------------------
+
+
+def test_create_model_places_it_centred_with_the_models_proportions(tmp_path):
+    """Units in model files vary (cm, m, inches), so a new model is sized by
+    its proportions — 4 ft across — for the designer to set its real size."""
+    from landscape.editor_session import EditorSession
+
+    models = tmp_path / "models"
+    _tall_obj(models / "bench.obj")
+    path = tmp_path / "s.yaml"
+    path.write_text("page_width: 20\npage_height: 20\nscale: 36\nobjects: []\n")
+    session = EditorSession(str(MATERIALS))
+    session.load(path)
+
+    object_id = session.create_model("bench.obj", models)
+
+    model = session.doc.get(object_id).primitive
+    assert (model.file, model.x, model.y) == ("bench.obj", 10, 10)
+    assert model.width == pytest.approx(4) and model.depth == pytest.approx(2) and model.height == pytest.approx(12)
+    session.save()
+    assert load_scene(path).get(object_id).primitive.file == "bench.obj"
+    session.undo()
+    assert not session.doc.objects
+
+
+def test_the_editor_marks_a_missing_model_on_the_plan(qtbot, tmp_path):
+    from landscape.editor import EditorWindow
+
+    window = EditorWindow(materials_path=str(MATERIALS), models_dir=tmp_path / "empty")
+    qtbot.addWidget(window)
+    window.load_scene(_scene(tmp_path))
+    item = next(i for i in window._view.scene().items() if i.data(0) == "bench")
+    labels = [c.text() for c in item.childItems() if hasattr(c, "text")]
+    assert any("missing" in label for label in labels)
+    assert "bench.obj" in window.statusBar().currentMessage()
+
+
+def test_create_model_from_the_menu(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog
+
+    from landscape.editor import EditorWindow
+
+    models = tmp_path / "models"
+    _tall_obj(models / "bench.obj")
+    path = tmp_path / "s.yaml"
+    path.write_text("page_width: 20\npage_height: 20\nscale: 36\nobjects: []\n")
+    window = EditorWindow(materials_path=str(MATERIALS), models_dir=models)
+    qtbot.addWidget(window)
+    window.load_scene(path)
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: ("bench.obj", True))
+
+    window._on_create_model()
+
+    assert [o.primitive.file for o in window.session.doc.objects] == ["bench.obj"]
+    assert window._selected_id == window.session.doc.objects[0].id

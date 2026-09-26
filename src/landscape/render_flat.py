@@ -129,7 +129,8 @@ def render_flat(
         is_area = geom.geom_type in ("Polygon", "MultiPolygon")
         if is_area:
             _draw_polygon_path(ctx, geom, page_height)
-            ctx.set_source_rgb(*_rgb01(material.color))
+            fill = "#DCD8CE" if (obj.model is not None and material.id == "__fallback__") else material.color
+            ctx.set_source_rgb(*_rgb01(fill))  # a model's footprint: neutral, not the magenta fallback
             ctx.fill_preserve()
             weight = material.edge.get("weight", 1.0)
             if weight and weight > 0:

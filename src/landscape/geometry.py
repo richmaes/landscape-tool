@@ -17,7 +17,7 @@ import numpy as np
 from opensimplex import OpenSimplex
 from scipy.interpolate import splev, splprep
 from shapely import affinity
-from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry import box, LineString, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
@@ -36,6 +36,7 @@ from .schema import (
     Transform,
     WavyPath,
     Walkway,
+    Model,
 )
 
 
@@ -67,6 +68,7 @@ class ResolvedObject:
     rule: str | None = None  # set for keepout objects
     pattern: str | None = None  # the object's own paver pattern, if it chose one
     solid: "Solid | None" = None  # the object's own 3D base/height (a fence's from its `height`)
+    model: "ModelPlacement | None" = None  # for a `model` object: where its 3D model goes
 
 
 @dataclass
@@ -109,6 +111,7 @@ class ResolvedScene:
                         rule=obj.rule,
                         pattern=obj.pattern,
                         solid=obj.solid,
+                        model=obj.model,
                     )
                 )
         return ResolvedScene(objects=cropped)
@@ -123,7 +126,42 @@ def _object_solid(obj: SceneObject):
         return obj.solid
     if isinstance(obj.primitive, FenceLine):
         return Solid(base=0.0, height=obj.primitive.height)
+    if isinstance(obj.primitive, Model):
+        return Solid(base=0.0, height=obj.primitive.height * obj.transform.scale)
     return None
+
+
+@dataclass
+class ModelPlacement:
+    """Where a `model` object's 3D model goes once the object's own
+    transform (a drag, a turn, a resize in the editor) is applied: its
+    footprint's centre, size and total rotation. Its height is the object's
+    effective solid height."""
+
+    file: str
+    x: float
+    y: float
+    width: float
+    depth: float
+    rotation: float
+    up: str
+
+    @property
+    def up_axis(self) -> str:
+        """The file's up axis: as declared, else by format — STL and PLY are
+        usually Z-up, glTF is Y-up by specification, OBJ and others mostly Y."""
+        from .models import default_up_axis
+
+        return self.up or default_up_axis(self.file)
+
+
+def _model_placement(obj: SceneObject, footprint: BaseGeometry) -> "ModelPlacement | None":
+    if not isinstance(obj.primitive, Model):
+        return None
+    p, t = obj.primitive, obj.transform
+    c = footprint.centroid
+    return ModelPlacement(file=p.file, x=c.x, y=c.y, width=p.width * t.scale, depth=p.depth * t.scale,
+                          rotation=p.rotation + t.rotation, up=p.up)
 
 
 def resolve_scene(doc: SceneDocument) -> ResolvedScene:
@@ -151,6 +189,7 @@ def resolve_scene(doc: SceneDocument) -> ResolvedScene:
             rule=rules[obj.id],
             pattern=obj.pattern,
             solid=_object_solid(obj),
+            model=_model_placement(obj, raw_geometry[obj.id]),
         )
         for obj in doc.objects
     ]
@@ -199,6 +238,11 @@ def primitive_to_geometry(primitive: Primitive) -> BaseGeometry:
         return _wavy_path_geometry(primitive)
     if isinstance(primitive, Walkway):
         return LineString(primitive.points).buffer(primitive.width / 2, cap_style="flat")
+    if isinstance(primitive, Model):
+        # the model's footprint on the plan, centred on (x, y) and turned
+        footprint = box(primitive.x - primitive.width / 2, primitive.y - primitive.depth / 2,
+                        primitive.x + primitive.width / 2, primitive.y + primitive.depth / 2)
+        return affinity.rotate(footprint, primitive.rotation, origin=(primitive.x, primitive.y))
     if isinstance(primitive, Keepout):
         if primitive.shape is None:
             raise GeometryError("keepout has no shape to resolve")

@@ -3,7 +3,9 @@
 **Status:** built 2026-09-25 — heights (`solid: {base, height}`), cameras with
 a look-at point (canvas markers + a 3D camera panel section), the **3D view**
 mode (flat-shaded, PyVista), and 3D exports (`--mode 3d`, recipes, the Export
-dialog); the backyard has its decided heights and a first camera. Still open:
+dialog); the backyard has its decided heights and a first camera; 3D **models** from a
+local, never-committed `models/` folder (placeholder boxes when absent — see
+`models/README.md`). Still open:
 see M11 in `TODO.md` (posts-and-rails fences, tree crowns, `sits_on`, the
 watercolor 3D style, firepit/water-feature heights).
 **Asked for by Rich:** "a new mode, a 3D view from a fixed position that we

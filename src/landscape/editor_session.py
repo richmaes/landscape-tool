@@ -485,6 +485,38 @@ class EditorSession:
         self.autosave()
         return object_id
 
+    def create_model(self, file: str, models_dir=None) -> str:
+        """Place a model from the models folder at the page centre, sized by
+        its own proportions (4 ft across) for the designer to set its real
+        size. Undoable; returns the new object's id."""
+        from .dimensions import _num
+        from .models import find_model, model_proportions
+        from .schema import Model
+
+        path = find_model(file, models_dir)
+        if path is None:
+            raise ValueError(f"no model '{file}' in the models folder")
+        width, depth, height = model_proportions(path)
+        stem = "".join(ch if ch.isalnum() else "_" for ch in Path(file).stem.lower()).strip("_") or "model"
+        object_id = self._generate_id(stem)
+        cx, cy = self.doc.page_width / 2, self.doc.page_height / 2
+        model = Model(file=file, x=_num(cx), y=_num(cy), width=width, depth=depth, height=height)
+        self.push_undo()
+        z = max((o.z for o in self.doc.objects), default=0) + 1
+        layer = "structures" if "structures" in self.doc.layers else (self.doc.layers[0] if self.doc.layers else "default")
+        self.doc.objects.append(SceneObject(id=object_id, primitive=model, layer=layer, z=z))
+        self.doc.resolution_order.append(object_id)
+        fields = {k: v for k, v in primitive_to_raw_dict(model).items() if not (k in ("up", "rotation") and not v)}
+        raw_node = CommentedMap(id=object_id, **fields, layer=layer, z=z)
+        objects = self.raw.get("objects")
+        if objects is None:
+            objects = self.raw["objects"] = CommentedSeq()
+        objects.append(raw_node)
+        self.raw_objects[object_id] = raw_node
+        self.recompute()
+        self.autosave()
+        return object_id
+
     def _generate_id(self, kind: str) -> str:
         existing = {o.id for o in self.doc.objects}
         n = 1

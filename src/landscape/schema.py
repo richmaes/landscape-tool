@@ -269,6 +269,26 @@ class Keepout(Primitive):
     rule: str = ""
 
 
+@dataclass
+class Model(Primitive):
+    """A 3D model file from the local models folder (see `models.py`),
+    placed with its footprint centred on (`x`, `y`), `width` x `depth` on
+    the plan turned by `rotation` degrees, standing `height` tall — all in
+    real feet; the model is fitted into that box, keeping its proportions.
+    On the plan it's its footprint; if the file isn't there, the 3D view
+    draws a placeholder box of this size instead."""
+
+    kind: ClassVar[str] = "model"
+    file: str = ""
+    x: float = 0.0
+    y: float = 0.0
+    width: float = 0.0
+    depth: float = 0.0
+    height: float = 0.0
+    rotation: float = 0.0
+    up: str = ""  # the file's "up" axis, "y" or "z"; empty = by format (y for most, z for STL/PLY)
+
+
 PRIMITIVE_TYPES: dict[str, type[Primitive]] = {
     cls.kind: cls
     for cls in (
@@ -282,6 +302,7 @@ PRIMITIVE_TYPES: dict[str, type[Primitive]] = {
         WavyPath,
         Walkway,
         Keepout,
+        Model,
     )
 }
 
@@ -297,6 +318,16 @@ def parse_primitive(data: dict[str, Any]) -> Primitive:
         shape_data = data.get("shape")
         shape = parse_primitive(shape_data) if shape_data else None
         return Keepout(shape=shape, rule=data.get("rule", ""))
+    if cls is Model:
+        model = cls.from_dict(data)
+        if not model.file:
+            raise SchemaError("a model needs a 'file' (its name in the models folder)")
+        for dimension in ("width", "depth", "height"):
+            if getattr(model, dimension) <= 0:
+                raise SchemaError(f"a model's {dimension} must be greater than zero (feet)")
+        if model.up not in ("", "y", "z"):
+            raise SchemaError("a model's 'up' must be y or z")
+        return model
     if cls in (Polygon, FenceLine, WavyPath, Walkway):
         payload = dict(data)
         if "points" in payload:

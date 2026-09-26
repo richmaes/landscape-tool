@@ -32,9 +32,9 @@ def renders(monkeypatch):
     calls = []
     real = render3d.render_3d_image
 
-    def recording(doc, scene, materials, camera, width=1200, height=800, surround=True):
+    def recording(doc, scene, materials, camera, width=1200, height=800, **options):
         calls.append({"camera": camera, "size": (width, height), "ids": {o.id for o in scene.objects}})
-        return real(doc, scene, materials, camera, width=width, height=height, surround=surround)
+        return real(doc, scene, materials, camera, width=width, height=height, **options)
 
     monkeypatch.setattr(render3d, "render_3d_image", recording)
     return calls

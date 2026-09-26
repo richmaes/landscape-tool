@@ -15,3 +15,8 @@ out/
 
 # OS
 .DS_Store
+
+# Local 3D models (TurboSquid etc.): licences don't allow redistributing the
+# files, so nothing in models/ is committed except its README.
+models/*
+!models/README.md

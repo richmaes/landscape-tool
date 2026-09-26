@@ -275,3 +275,20 @@ def test_an_export_recipe_can_include_3d_views(tmp_path):
     )
     written = run_recipe(load_recipe(recipe))
     assert written == [tmp_path / "side.png"]
+
+
+def test_nothing_imports_pyvista_at_module_level():
+    """A real bug (2026-09-25): a test file importing PyVista at the top —
+    so at collection time, before Qt starts — let VTK set up macOS's
+    windowing first; the suite then ran twice as slowly and hung for
+    minutes at exit. PyVista must only be imported inside functions."""
+    import re
+
+    root = Path(__file__).parent.parent
+    offenders = [
+        str(path.relative_to(root))
+        for folder in ("src", "tests")
+        for path in (root / folder).rglob("*.py")
+        if re.search(r"^(import pyvista|from pyvista)", path.read_text(), re.M)
+    ]
+    assert offenders == []

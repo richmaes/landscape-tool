@@ -19,6 +19,7 @@ from .schema import (
     Ellipse,
     FenceLine,
     Keepout,
+    Model,
     Line,
     Polygon,
     Primitive,
@@ -59,6 +60,8 @@ def object_dimensions(obj: SceneObject) -> Dimensions | None:
 def _primitive_dimensions(p: Primitive) -> Dimensions | None:
     if isinstance(p, Rect):
         return Dimensions(p.width, p.height)
+    if isinstance(p, Model):
+        return Dimensions(p.width, p.depth)  # its footprint; its height is the Height row
     if isinstance(p, Ellipse):
         return Dimensions(2 * p.rx, 2 * p.ry)
     if isinstance(p, Circle):
@@ -95,6 +98,8 @@ def _resize(p: Primitive, w: float | None, h: float | None, object_id: str) -> P
         new_w, new_h = w if w is not None else p.width, h if h is not None else p.height
         cx, cy = p.x + p.width / 2, p.y + p.height / 2
         return replace(p, x=_num(cx - new_w / 2), y=_num(cy - new_h / 2), width=_num(new_w), height=_num(new_h))
+    if isinstance(p, Model):  # centred already, so the centre stays put
+        return replace(p, width=_num(w) if w is not None else p.width, depth=_num(h) if h is not None else p.depth)
     if isinstance(p, Ellipse):
         return replace(p, rx=_num(w / 2) if w is not None else p.rx, ry=_num(h / 2) if h is not None else p.ry)
     if isinstance(p, Circle):

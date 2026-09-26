@@ -34,6 +34,8 @@ GROUND_BEYOND = "#B9C8A4"
 VINYL = "#F4F2EC"
 UNASSIGNED = "#E9E6DF"  # items with no material yet: plain, not flat mode's magenta
 OUTLINE = "#3A3833"
+PLACEHOLDER = "#D9D6CE"  # a model whose file isn't in the models folder
+MODEL_DEFAULT = "#CFC9BD"  # a model file with no colours of its own (STL, PLY)
 SURROUND_HEIGHT = 6.0
 SURROUND_THICKNESS = 0.33
 _GROUND_STEP = 0.004  # ft between stacked flat surfaces, so the upper one wins
@@ -76,6 +78,103 @@ def _surround(doc: SceneDocument):
     return [_prism(shapely.box(*s), 0.0, SURROUND_HEIGHT) for s in sides]
 
 
+def place_models(plotter, scene: ResolvedScene, materials: MaterialLibrary, models_dir=None) -> list[tuple]:
+    """Every `model` object: its file from the models folder, stood upright,
+    scaled to fit inside its declared width x depth x height *keeping its
+    proportions*, turned and set on its footprint — or, if the file isn't
+    there (or won't load), a plain placeholder box of that size. Returns
+    (object id, "model" | "placeholder", final bounds) for each."""
+    import pyvista as pv
+
+    from .models import find_model
+
+    placed = []
+    for obj in scene.paint_order():
+        placement = obj.model
+        if placement is None or obj.geometry.is_empty:
+            continue
+        solid = effective_solid(obj, materials)
+        path = find_model(placement.file, models_dir)
+        actors = _import_model(plotter, path) if path is not None else []
+        if actors:
+            matrix = _fit_matrix(_combined_bounds(actors), placement, solid.base, solid.height)
+            for actor in actors:
+                existing = actor.GetUserMatrix()
+                own = pv.array_from_vtkmatrix(existing) if existing is not None else np.eye(4)
+                actor.SetUserMatrix(pv.vtkmatrix_from_array(matrix @ own))
+            placed.append((obj.id, "model", _combined_bounds(actors)))
+            continue
+        box_mesh = None
+        for poly in _polygons(obj.geometry):
+            points, faces = _prism(poly, solid.base, solid.base + solid.height)
+            box_mesh = pv.PolyData(points, faces=faces).clean()
+            plotter.add_mesh(box_mesh, color=PLACEHOLDER, opacity=0.85, smooth_shading=False, ambient=0.55,
+                             diffuse=0.45)
+            _add_outline(plotter, box_mesh, "#8A8780", 1.0)
+        if box_mesh is not None:
+            placed.append((obj.id, "placeholder", tuple(box_mesh.bounds)))
+    return placed
+
+
+def _import_model(plotter, path) -> list:
+    """Load a model file into the plotter; the new actors. Importers keep a
+    file's materials and textures; if one yields nothing, fall back to
+    reading the bare geometry."""
+    import pyvista as pv
+
+    before = set(plotter.renderer.actors)
+    importers = {".glb": plotter.import_gltf, ".gltf": plotter.import_gltf, ".obj": plotter.import_obj,
+                 ".3ds": plotter.import_3ds, ".wrl": plotter.import_vrml, ".vrml": plotter.import_vrml}
+    importer = importers.get(path.suffix.lower())
+    if importer is not None:
+        try:
+            importer(str(path))
+        except Exception:  # a file the importer can't handle: fall back below
+            pass
+    actors = [a for key, a in plotter.renderer.actors.items() if key not in before]
+    if actors:
+        return actors
+    try:
+        mesh = pv.read(str(path))
+    except Exception:
+        return []  # unreadable: the caller draws a placeholder
+    if isinstance(mesh, pv.MultiBlock):
+        mesh = mesh.combine().extract_surface()
+    if mesh.n_points == 0:
+        return []
+    return [plotter.add_mesh(mesh, color=MODEL_DEFAULT, ambient=0.55, diffuse=0.45)]
+
+
+def _combined_bounds(actors) -> tuple:
+    b = np.array([a.GetBounds() for a in actors])
+    return (b[:, 0].min(), b[:, 1].max(), b[:, 2].min(), b[:, 3].max(), b[:, 4].min(), b[:, 5].max())
+
+
+def _fit_matrix(bounds, placement, base: float, height: float) -> np.ndarray:
+    """Model space -> scene: turn the file's up axis to +z, move its
+    footprint centre to the origin and its bottom to 0, scale uniformly to
+    fit width x depth x height, turn by the placement's rotation, and set
+    it on its footprint at `base`."""
+    up = np.eye(4)
+    if placement.up_axis == "y":  # +90 degrees about x: y -> z, z -> -y
+        up = np.array([[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], float)
+    x0, x1, y0, y1, z0, z1 = bounds
+    corners = np.array([[x, y, z, 1] for x in (x0, x1) for y in (y0, y1) for z in (z0, z1)]) @ up.T
+    lo, hi = corners[:, :3].min(axis=0), corners[:, :3].max(axis=0)
+    extent = hi - lo
+    targets = (placement.width, placement.depth, height)
+    ratios = [t / e for t, e in zip(targets, extent) if e > 1e-9 and t > 0]
+    s = min(ratios) if ratios else 1.0
+    centre = np.eye(4)
+    centre[:3, 3] = [-(lo[0] + hi[0]) / 2, -(lo[1] + hi[1]) / 2, -lo[2]]
+    scale = np.diag([s, s, s, 1.0])
+    a = math.radians(placement.rotation)
+    turn = np.array([[math.cos(a), -math.sin(a), 0, 0], [math.sin(a), math.cos(a), 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+    place = np.eye(4)
+    place[:3, 3] = [placement.x, placement.y, base]
+    return place @ turn @ scale @ centre @ up
+
+
 def _add_outline(plotter, mesh, color: str, width: float) -> None:
     """The solid's creases (edges where faces meet at more than 30°)."""
     edges = mesh.extract_feature_edges(feature_angle=30, boundary_edges=False,
@@ -92,9 +191,11 @@ def render_3d_image(
     width: int = 1200,
     height: int = 800,
     surround: bool = True,
+    models_dir=None,
 ) -> Image.Image:
     """The scene from `camera`, flat-shaded, as a `width` x `height` image.
-    `camera.fov` is the horizontal field of view."""
+    `camera.fov` is the horizontal field of view. Model files are looked up
+    in `models_dir` (default: `models.default_models_dir()`)."""
     import pyvista as pv
 
     plotter = pv.Plotter(off_screen=True, window_size=(width, height), lighting="none")
@@ -118,8 +219,8 @@ def render_3d_image(
         plotter.add_mesh(ground, color=GROUND_BEYOND, **surface)
 
         for rank, obj in enumerate(scene.paint_order()):
-            if obj.annotation or obj.rule or obj.geometry.is_empty:
-                continue
+            if obj.annotation or obj.rule or obj.geometry.is_empty or obj.model is not None:
+                continue  # models are placed below, from their files
             polys = _polygons(obj.geometry)
             if not polys:
                 continue  # lines (seams) have no surface to draw yet
@@ -138,6 +239,8 @@ def render_3d_image(
                 plotter.add_mesh(mesh, color=color, **surface)
                 if solid.height > 0.05:
                     _add_outline(plotter, mesh, OUTLINE, 1.2)
+
+        place_models(plotter, scene, materials, models_dir)
 
         if surround:
             for points, faces in _surround(doc):
@@ -186,7 +289,7 @@ def resolve_camera(doc: SceneDocument, camera: "Camera | str | None") -> Camera:
 
 
 def render_3d_to_file(doc, scene, materials, path, camera=None, width: int = 1600, height: int = 1000,
-                      surround: bool = True) -> None:
+                      surround: bool = True, models_dir=None) -> None:
     """The 3D view from `camera` as a `width` x `height` picture: a PNG
     (DPI recorded as `PRINT_DPI`), or embedded at that size in a PDF/SVG."""
     import io
@@ -195,7 +298,7 @@ def render_3d_to_file(doc, scene, materials, path, camera=None, width: int = 160
     import cairo
 
     image = render_3d_image(doc, scene, materials, resolve_camera(doc, camera), width=width, height=height,
-                            surround=surround)
+                            surround=surround, models_dir=models_dir)
     path = Path(path)
     if path.suffix.lower() == ".png":
         image.save(str(path), format="PNG", dpi=(PRINT_DPI, PRINT_DPI))

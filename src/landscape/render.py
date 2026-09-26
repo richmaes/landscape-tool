@@ -25,7 +25,7 @@ from .render_flat import render_scene_to_pdf, render_scene_to_png, render_scene_
 
 MODES = ("flat", "art", "3d")
 # the only options a 3D view uses; the plan's legend, scale and DPI don't apply
-_3D_OPTIONS = ("camera", "width", "height", "surround")
+_3D_OPTIONS = ("camera", "width", "height", "surround", "models_dir")
 EXTENSIONS = (".png", ".svg", ".pdf")
 
 _RENDERERS = {

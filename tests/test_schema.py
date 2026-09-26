@@ -122,6 +122,8 @@ _SAMPLE_PRIMITIVE_DATA = {
     "line": {"type": "line", "x1": 0, "y1": 0, "x2": 1, "y2": 1},
     "fence_line": {"type": "fence_line", "points": [[0, 0], [1, 0]], "post_size": 0.5},
     "wavy_path": {"type": "wavy_path", "points": [[0, 0], [1, 0]], "waviness": 0.4, "seed": 7},
+    "model": {"type": "model", "file": "bench.glb", "x": 5, "y": 5, "width": 4, "depth": 2, "height": 3,
+              "rotation": 15, "up": "y"},
     "walkway": {"type": "walkway", "points": [[0, 0], [1, 0]], "width": 2},
     "keepout": {
         "type": "keepout",
