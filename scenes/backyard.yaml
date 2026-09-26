@@ -90,12 +90,13 @@ objects:
     solid: {base: 0, height: 0.33}
 
   - id: hot_tub
-    type: rect
-    x: 14.466
-    y: 19.0
-    width: 7.0
-    height: 7.0
-    corner_r: 1.006
+    type: model
+    file: Simple Hot Tub/simple_hot_tub.obj
+    x: 17.966
+    y: 22.5
+    width: 7
+    depth: 7
+    height: 3
     material: water
     layer: structures
     z: 3
